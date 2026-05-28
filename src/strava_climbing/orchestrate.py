@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import manifests
+from . import body_stats, highlight, manifests
 from .boundary_detection import find_attempts
 from .config import paths as P
 from .config import runtime as R
@@ -117,6 +117,34 @@ def _process_one(
     cfg_hash: str,
     force: bool,
 ) -> int:
+    source_name = Path(video["source_path"]).name
+    crow = curated.get(source_name)
+    climber_id = upsert_climber(conn, crow.climber_name) if crow else None
+    route_id = _resolve_route_from_curated(conn, crow) if crow else None
+    return process_one_video(
+        conn, video,
+        climber_id=climber_id,
+        route_id=route_id,
+        climber_name=crow.climber_name if crow else None,
+        cfg_hash=cfg_hash, force=force,
+    )
+
+
+def process_one_video(
+    conn,
+    video: dict,
+    *,
+    climber_id: int | None,
+    route_id: int | None,
+    climber_name: str | None,
+    cfg_hash: str,
+    force: bool = False,
+) -> int:
+    """Run pose → boundaries → metrics → stats → overlay → highlight for one video.
+
+    Returns the number of attempts written. Idempotent on (video_id, cfg_hash)
+    via the manifest unless ``force=True``.
+    """
     video_id = video["id"]
     normalized = Path(video["normalized_path"])
     frame_h = int(video["height"])
@@ -142,17 +170,15 @@ def _process_one(
     if not attempts:
         return 0
 
-    # Climber + route resolution from the curated CSV (filename match).
-    source_name = Path(video["source_path"]).name
-    crow = curated.get(source_name)
-    climber_id = upsert_climber(conn, crow.climber_name) if crow else None
-    route_id = _resolve_route(conn, crow) if crow else None
+    route_source = RouteSource.MANUAL if route_id else RouteSource.UNASSIGNED
 
     added = 0
     for i, bounds in enumerate(attempts):
         metrics = compute_metrics(
             bounds, track.com_xy, fps=fps, attempts_count=len(attempts)
         )
+        stats = body_stats.compute(bounds, track.xy, track.com_xy, fps=fps)
+
         overlay_path = P.OVERLAYS_DIR / f"{video_id}_a{i}.mp4"
         try:
             render_overlay(
@@ -161,13 +187,24 @@ def _process_one(
                     time_seconds=metrics.time_seconds,
                     smoothness_pct=None,  # filled later by _finalize_smoothness_percentiles
                     send=metrics.send,
-                    climber_name=crow.climber_name if crow else None,
+                    climber_name=climber_name,
                 ),
                 overlay_path,
             )
         except Exception:
             log.exception("overlay render failed for video %s attempt %s", video_id, i)
             overlay_path = None
+
+        highlight_path: Path | None = P.OVERLAYS_DIR.parent / "highlights" / f"{video_id}_a{i}.mp4"
+        try:
+            start_s, dur_s = highlight.pick_highlight_window(bounds, track.com_xy, fps=fps)
+            highlight.render_highlight(
+                normalized, highlight_path,
+                start_seconds=start_s, duration_seconds=dur_s,
+            )
+        except Exception:
+            log.exception("highlight render failed for video %s attempt %s", video_id, i)
+            highlight_path = None
 
         upsert_attempt(
             conn,
@@ -183,8 +220,13 @@ def _process_one(
                 smoothness_pct=None,
                 send=metrics.send,
                 attempts_count=metrics.attempts_count,
-                route_source=RouteSource.MANUAL if route_id else RouteSource.UNASSIGNED,
+                route_source=route_source,
                 overlay_path=str(overlay_path) if overlay_path else None,
+                highlight_path=str(highlight_path) if highlight_path else None,
+                dynamic_moves=stats.dynamic_moves,
+                longest_reach_px=stats.longest_reach_px,
+                hang_time_seconds=stats.hang_time_seconds,
+                idle_seconds=stats.idle_seconds,
                 config_hash=cfg_hash,
             ),
         )
@@ -202,6 +244,83 @@ def _process_one(
         )
     )
     return added
+
+
+def upsert_route_for(conn, *, gym: str, color: str | None) -> int:
+    """Find-or-create a route keyed by (gym, color). Returns route id."""
+    wall_row = conn.execute(
+        "SELECT id FROM wall WHERE gym_name = %s", (gym,)
+    ).fetchone()
+    if wall_row is None:
+        wall_id = conn.execute(
+            "INSERT INTO wall(gym_name) VALUES (%s) RETURNING id", (gym,)
+        ).fetchone()["id"]
+    else:
+        wall_id = wall_row["id"]
+
+    row = conn.execute(
+        "SELECT id FROM route WHERE wall_id = %s AND color IS NOT DISTINCT FROM %s",
+        (wall_id, color),
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    return upsert_route(
+        conn,
+        Route(id=None, wall_id=wall_id, color=color, origin=RouteSource.MANUAL),
+    )
+
+
+def process_uploaded_file(
+    raw_path: Path,
+    *,
+    climber_name: str,
+    color: str | None,
+    gym: str,
+) -> int | None:
+    """Ingest one uploaded video and run the full pipeline on it.
+
+    Returns the attempt id of the first attempt extracted, or None if pose
+    found no climber track (rare on a real climb clip; usually means the
+    file isn't a climb video).
+    """
+    from .ingest import _detect_videotoolbox, _ingest_one
+
+    P.ensure_dirs()
+    init_db()
+    cfg_hash = current_config_hash()
+    use_vt = _detect_videotoolbox()
+
+    with connect() as conn:
+        entry = _ingest_one(conn, raw_path, use_vt)
+        if entry.status not in ("ok", "skipped"):
+            raise RuntimeError(f"ingest failed: {entry.reason}")
+        # _ingest_one upserts the video; look it up by SHA.
+        v_row = conn.execute(
+            "SELECT id, source_path, normalized_path, height, fps "
+            "FROM video WHERE source_sha256 = %s",
+            (entry.source_sha256,),
+        ).fetchone()
+        if v_row is None:
+            raise RuntimeError("video row missing after ingest")
+
+        climber_id = upsert_climber(conn, climber_name)
+        route_id = upsert_route_for(conn, gym=gym, color=color)
+
+        process_one_video(
+            conn, dict(v_row),
+            climber_id=climber_id,
+            route_id=route_id,
+            climber_name=climber_name,
+            cfg_hash=cfg_hash,
+            force=True,
+        )
+        _finalize_smoothness_percentiles(conn, cfg_hash)
+
+        row = conn.execute(
+            "SELECT id FROM attempt WHERE video_id = %s ORDER BY id ASC LIMIT 1",
+            (v_row["id"],),
+        ).fetchone()
+        return row["id"] if row else None
 
 
 def _run_pose_stage(video_id: int, normalized: Path, cache_path: Path, cfg_hash: str) -> None:
@@ -228,33 +347,9 @@ def _run_pose_stage(video_id: int, normalized: Path, cache_path: Path, cfg_hash:
     )
 
 
-def _resolve_route(conn, crow: CuratedRow) -> int:
-    """Find-or-create the (wall, route) pair for a curated row."""
-    wall_row = conn.execute(
-        "SELECT id FROM wall WHERE gym_name = %s", (crow.gym,)
-    ).fetchone()
-    if wall_row is None:
-        wall_id = conn.execute(
-            "INSERT INTO wall(gym_name) VALUES (%s) RETURNING id", (crow.gym,)
-        ).fetchone()["id"]
-    else:
-        wall_id = wall_row["id"]
-
-    row = conn.execute(
-        "SELECT id FROM route WHERE wall_id = %s AND color IS NOT DISTINCT FROM %s",
-        (wall_id, crow.color),
-    ).fetchone()
-    if row is not None:
-        return row["id"]
-    return upsert_route(
-        conn,
-        Route(
-            id=None, wall_id=wall_id, color=crow.color,
-            origin=RouteSource.MANUAL,
-            sample_frame_path=None, hold_layout=None,
-            layout_embedding=None, cluster_confidence=None,
-        ),
-    )
+def _resolve_route_from_curated(conn, crow: CuratedRow) -> int:
+    """Find-or-create the (wall, route) pair for a curated CSV row."""
+    return upsert_route_for(conn, gym=crow.gym, color=crow.color)
 
 
 def _finalize_smoothness_percentiles(conn, cfg_hash: str) -> None:
@@ -302,4 +397,12 @@ def verify_demo() -> list[str]:
     return missing
 
 
-__all__ = ["CuratedRow", "process_all", "read_curated_csv", "verify_demo"]
+__all__ = [
+    "CuratedRow",
+    "process_all",
+    "process_one_video",
+    "process_uploaded_file",
+    "read_curated_csv",
+    "upsert_route_for",
+    "verify_demo",
+]

@@ -73,6 +73,11 @@ class Attempt:
     smoothness_raw: float | None = None
     smoothness_pct: float | None = None
     overlay_path: str | None = None
+    highlight_path: str | None = None
+    dynamic_moves: int | None = None
+    longest_reach_px: float | None = None
+    hang_time_seconds: float | None = None
+    idle_seconds: float | None = None
 
 
 @dataclass(slots=True, frozen=True)
