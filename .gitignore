@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# Virtualenv
+.venv/
+
+# uv
+uv.lock.bak
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Project artifacts
+data/raw/*
+data/normalized/*
+data/overlays/*
+data/cache/*
+data/manifests/*
+data/*.sqlite
+data/*.sqlite-journal
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/ingest_report.json
+data/curated_subset.csv
+
+# Model weights
+models/*.pt
+models/*.onnx
+models/dinov3_*/
+models/sam2*/
+
+# Keep directory structure
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/normalized/.gitkeep
+!data/overlays/.gitkeep
+!data/cache/.gitkeep
+!data/manifests/.gitkeep
+!models/.gitkeep
+
+# Notebook artifacts
+notebooks/.ipynb_checkpoints/
+
+# Environment
+.env
+.env.local
