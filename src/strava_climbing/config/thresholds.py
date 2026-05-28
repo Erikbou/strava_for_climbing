@@ -20,8 +20,12 @@ POSE_IOU = 0.5
 POSE_IMGSZ = 720
 
 # --- Attempt boundary detection ------------------------------------------------------
-START_ANKLE_ABOVE_FRACTION = 0.80  # y above which ankles count as "on the wall"
+# Portrait-clip assumption: climber occupies most of frame; brief ankle dropouts
+# (occlusion, low conf) should NOT split a single climb into many sub-attempts.
+START_ANKLE_ABOVE_FRACTION = 0.95  # ankle must be in the upper 95% of frame height
 START_CONSECUTIVE_FRAMES = 5
+ON_WALL_GAP_CLOSE_FRAMES = 30      # bridge ≤1 s gaps in the on-wall mask
+MIN_ATTEMPT_FRAMES = 90            # filter sub-3 s ghost attempts
 
 TOP_WRIST_ABOVE_FRACTION = 0.10  # y below which wrist counts as "at top" (low y = high in frame)
 TOP_CONSECUTIVE_FRAMES = 10

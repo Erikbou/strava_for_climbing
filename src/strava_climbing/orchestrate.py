@@ -177,7 +177,9 @@ def process_one_video(
         metrics = compute_metrics(
             bounds, track.com_xy, fps=fps, attempts_count=len(attempts)
         )
-        stats = body_stats.compute(bounds, track.xy, track.com_xy, fps=fps)
+        stats = body_stats.compute(
+            bounds, track.xy, track.com_xy, fps=fps, frame_height=frame_h,
+        )
 
         overlay_path = P.OVERLAYS_DIR / f"{video_id}_a{i}.mp4"
         try:

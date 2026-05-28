@@ -35,14 +35,22 @@ _TABLES = ("attempt", "hold", "route", "wall", "video", "climber")
 
 @pytest.fixture
 def conn():
-    """Open a connection, apply schema, truncate all tables before yielding."""
+    """Open a connection, apply schema, truncate before AND after each test.
+
+    Post-test truncation matters because the test DB is currently shared with
+    the dev Postgres — leaving rows behind would clobber the running app.
+    """
     c = connect()
     c.execute(SCHEMA_SQL)
-    c.execute(f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
+    truncate = f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"
+    c.execute(truncate)
     try:
         yield c
     finally:
-        c.close()
+        try:
+            c.execute(truncate)
+        finally:
+            c.close()
 
 
 def test_schema_creates_cleanly(conn):

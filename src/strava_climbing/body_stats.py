@@ -19,14 +19,16 @@ _RIGHT_WRIST = 10
 _LEFT_HIP = 11
 _RIGHT_HIP = 12
 
-# Vertical velocity (px/sec) threshold above which a frame counts as a "burst".
-# A dynamic move is a contiguous run of burst frames separated by quiet frames.
-_DYNAMIC_VEL_PX_PER_S = 220.0
-_DYNAMIC_MIN_RUN_FRAMES = 2
+# Burst threshold expressed as a *fraction of frame height per second* so the
+# detector scales with video resolution and doesn't need re-tuning per clip.
+# Portrait-clip baseline: a single climbing pull covers ~10-20% of the frame
+# height; 0.10 catches solid pulls without flagging breathing/sway.
+_DYNAMIC_VEL_FRAC_HEIGHT_PER_S = 0.10
+_DYNAMIC_MIN_RUN_FRAMES = 3
 _DYNAMIC_GAP_FRAMES = 6
 
-# "Idle" = velocity below this (px/sec). Used for both hang-time and total idle.
-_IDLE_VEL_PX_PER_S = 25.0
+# "Idle" = vertical speed below 3% of frame height per second.
+_IDLE_VEL_FRAC_HEIGHT_PER_S = 0.03
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,11 +39,19 @@ class BodyStats:
     idle_seconds: float
 
 
-def compute(bounds: AttemptBounds, xy: np.ndarray, com_xy: np.ndarray, fps: float) -> BodyStats:
+def compute(
+    bounds: AttemptBounds,
+    xy: np.ndarray,
+    com_xy: np.ndarray,
+    fps: float,
+    frame_height: int,
+) -> BodyStats:
     """Compute body-derived stats for a single attempt window.
 
     ``xy`` is the full ``(T, 17, 2)`` keypoint array; ``com_xy`` is ``(T, 2)``.
     Frames outside ``[bounds.start_frame, bounds.end_frame]`` are ignored.
+    Velocity thresholds scale with ``frame_height`` so portrait clips of
+    different resolutions all get the same physical sensitivity.
     """
     start, end = bounds.start_frame, bounds.end_frame
     com_slice = com_xy[start:end]
@@ -49,14 +59,17 @@ def compute(bounds: AttemptBounds, xy: np.ndarray, com_xy: np.ndarray, fps: floa
     fps = max(fps, 1.0)
     dt = 1.0 / fps
 
+    burst_threshold = _DYNAMIC_VEL_FRAC_HEIGHT_PER_S * frame_height
+    idle_threshold = _IDLE_VEL_FRAC_HEIGHT_PER_S * frame_height
+
     vy = _vertical_speed(com_slice, dt)  # px/sec
     speed = np.abs(vy)
 
     return BodyStats(
-        dynamic_moves=_count_dynamic_moves(vy),
+        dynamic_moves=_count_dynamic_moves(vy, burst_threshold),
         longest_reach_px=_longest_reach(xy_slice),
-        hang_time_seconds=_longest_idle_run(speed) * dt,
-        idle_seconds=float((speed < _IDLE_VEL_PX_PER_S).sum()) * dt,
+        hang_time_seconds=_longest_idle_run(speed, idle_threshold) * dt,
+        idle_seconds=float((speed < idle_threshold).sum()) * dt,
     )
 
 
@@ -75,14 +88,14 @@ def _vertical_speed(com: np.ndarray, dt: float) -> np.ndarray:
     return np.diff(y) / dt
 
 
-def _count_dynamic_moves(vy: np.ndarray) -> int:
+def _count_dynamic_moves(vy: np.ndarray, threshold_px_per_s: float) -> int:
     """A dynamic move = a contiguous run of frames where the climber is moving
     UP fast (image y decreasing, so vy < -threshold), separated from the next
     burst by at least `_DYNAMIC_GAP_FRAMES` quiet frames.
     """
     if vy.size == 0:
         return 0
-    burst = vy < -_DYNAMIC_VEL_PX_PER_S
+    burst = vy < -threshold_px_per_s
     moves = 0
     run = 0
     gap = 0
@@ -125,11 +138,11 @@ def _longest_reach(xy_slice: np.ndarray) -> float:
     return float(reach.max())
 
 
-def _longest_idle_run(speed: np.ndarray) -> int:
-    """Longest contiguous run of frames where speed < _IDLE_VEL_PX_PER_S."""
+def _longest_idle_run(speed: np.ndarray, threshold_px_per_s: float) -> int:
+    """Longest contiguous run of frames where speed < threshold."""
     if speed.size == 0:
         return 0
-    idle = speed < _IDLE_VEL_PX_PER_S
+    idle = speed < threshold_px_per_s
     best = run = 0
     for v in idle:
         if v:

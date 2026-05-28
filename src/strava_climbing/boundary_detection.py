@@ -45,6 +45,7 @@ def find_attempts(
     - ``frame_height`` — video pixel height for image-space thresholds
     """
     on_wall = _on_wall_mask(kpts_xy, kpts_conf, frame_height)
+    on_wall = _close_gaps(on_wall, T.ON_WALL_GAP_CLOSE_FRAMES)
     rests = _rest_mask(com_xy, frame_height)
     segments = _segments_from_mask(on_wall & ~rests)
 
@@ -55,7 +56,7 @@ def find_attempts(
 
     attempts: list[AttemptBounds] = []
     for start, end in split_segments:
-        if end - start < T.START_CONSECUTIVE_FRAMES:
+        if end - start < T.MIN_ATTEMPT_FRAMES:
             continue
         top = _detect_top_frame(kpts_xy, kpts_conf, frame_height, start, end)
         send = _classify_send(top, end, rests)
@@ -162,6 +163,25 @@ def _classify_send(top_frame: int | None, end: int, rests: np.ndarray) -> bool:
         return False
     window_start = max(0, top_frame - T.SEND_NO_REST_WINDOW_FRAMES)
     return not bool(rests[window_start:top_frame].any())
+
+
+def _close_gaps(mask: np.ndarray, max_gap: int) -> np.ndarray:
+    """Morphological close: fill False runs of length ≤ ``max_gap`` between True runs.
+
+    Without this, brief ankle-confidence dropouts (occlusion, fast motion)
+    fragment a single climb into many sub-attempts. Portrait-clip assumption:
+    if the climber went off-wall for <1 s, treat it as a dropout, not a rest.
+    """
+    if mask.size == 0 or max_gap <= 0:
+        return mask.copy()
+    out = mask.copy()
+    runs = _segments_from_mask(~mask)
+    for s, e in runs:
+        if s == 0 or e == mask.size:  # leading/trailing False — leave alone
+            continue
+        if e - s <= max_gap:
+            out[s:e] = True
+    return out
 
 
 def _min_consecutive(mask: np.ndarray, n: int) -> np.ndarray:

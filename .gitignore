@@ -39,6 +39,10 @@ models/*.pt
 models/*.onnx
 models/dinov3_*/
 models/sam2*/
+# Ultralytics drops yolo*.pt at the CWD on first run; catch it wherever it lands.
+yolo*.pt
+*.pt
+*.onnx
 
 # Keep directory structure
 !data/.gitkeep
