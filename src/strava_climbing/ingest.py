@@ -14,16 +14,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import db
 from .config import paths as P
 from .config import thresholds as T
-from .db import connect, get_video_by_sha, upsert_video
 from .schema import IngestReportEntry, Video
+
+log = logging.getLogger("strava_climbing.ingest")
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 _CHUNK = 1 << 20  # 1 MiB
@@ -175,8 +178,7 @@ def ingest_directory(raw_dir: Path | None = None) -> dict:
     """Top-level orchestration. Idempotent on source-file SHA-256."""
     raw = raw_dir or P.RAW_DIR
     P.ensure_dirs()
-
-    client = connect()
+    db.init_db()
 
     use_vt = _detect_videotoolbox()
     entries: list[IngestReportEntry] = []
@@ -186,7 +188,7 @@ def ingest_directory(raw_dir: Path | None = None) -> dict:
         if not src.is_file() or src.suffix.lower() not in VIDEO_EXTENSIONS:
             continue
         stats["seen"] += 1
-        entry = _ingest_one(client, src, use_vt)
+        entry = _ingest_one(src, use_vt)
         entries.append(entry)
         stats[_status_bucket(entry.status)] += 1
 
@@ -203,7 +205,7 @@ def _status_bucket(status: str) -> str:
     }.get(status, "errored")
 
 
-def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
+def _ingest_one(src: Path, use_videotoolbox: bool) -> IngestReportEntry:
     now = datetime.now(UTC)
     try:
         sha = sha256_file(src)
@@ -215,7 +217,7 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
             reason=f"sha256 failed: {e}",
         )
 
-    existing = get_video_by_sha(client, sha)
+    existing = db.get_video_by_sha(sha)
     if existing is not None and existing.ingest_status == "ok":
         return IngestReportEntry(
             source_path=str(src),
@@ -251,13 +253,19 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
             metadata=meta,
         )
 
+    # Upload to the configured backend's object storage (no-op for SQLite mode).
+    try:
+        normalized_key = db.upload_normalized(dst)
+    except Exception as e:
+        log.warning("normalized upload failed for %s: %s — falling back to basename", dst, e)
+        normalized_key = dst.name
+
     norm_meta = probe_video(dst)
-    upsert_video(
-        client,
+    db.upsert_video(
         Video(
             id=None,
             source_path=str(src),
-            normalized_path=str(dst),
+            normalized_path=normalized_key,
             source_sha256=sha,
             duration_seconds=norm_meta["duration_seconds"],
             width=norm_meta["width"],
@@ -272,7 +280,7 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
         source_path=str(src),
         status="ok",
         timestamp=now,
-        normalized_path=str(dst),
+        normalized_path=normalized_key,
         source_sha256=sha,
         metadata=norm_meta,
     )

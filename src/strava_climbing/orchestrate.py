@@ -11,24 +11,10 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import manifests
+from . import db, manifests
 from .boundary_detection import find_attempts
 from .config import paths as P
 from .config import runtime as R
-from .db import (
-    attempts_for_route,
-    connect,
-    distinct_route_ids_with_attempts,
-    find_or_create_wall,
-    find_route,
-    list_ok_videos,
-    overlay_paths_in_use,
-    route_sample_frame_paths,
-    update_attempt_smoothness_pct,
-    upsert_attempt,
-    upsert_climber,
-    upsert_route,
-)
 from .metrics import compute_metrics, compute_route_percentiles, current_config_hash
 from .overlay import OverlayHUD, render_overlay
 from .pose import load_pose_cache, pick_climber_track
@@ -69,17 +55,16 @@ def read_curated_csv(path: Path) -> dict[str, CuratedRow]:
 def process_all(*, force: bool = False) -> dict:
     """Run the full Stage-1 pipeline across all successfully ingested videos."""
     P.ensure_dirs()
-    client = connect()
+    db.init_db()
 
     curated = read_curated_csv(P.DATA_ROOT / "curated_subset.csv")
     cfg_hash = current_config_hash()
     stats = {"videos": 0, "attempts": 0, "skipped": 0, "errored": 0}
 
-    videos = list_ok_videos(client)
-    for v in videos:
+    for v in db.list_ok_videos():
         stats["videos"] += 1
         try:
-            added = _process_one(client, v, curated=curated, cfg_hash=cfg_hash, force=force)
+            added = _process_one(v, curated=curated, cfg_hash=cfg_hash, force=force)
             stats["attempts"] += added
         except Exception as e:
             log.exception("processing failed for video %s", v["id"])
@@ -96,7 +81,7 @@ def process_all(*, force: bool = False) -> dict:
                 )
             )
 
-    _finalize_smoothness_percentiles(client, cfg_hash)
+    _finalize_smoothness_percentiles()
 
     if R.stage2_enabled():
         try:
@@ -110,7 +95,6 @@ def process_all(*, force: bool = False) -> dict:
 
 
 def _process_one(
-    client,
     video: dict,
     *,
     curated: dict[str, CuratedRow],
@@ -118,7 +102,8 @@ def _process_one(
     force: bool,
 ) -> int:
     video_id = video["id"]
-    normalized = Path(video["normalized_path"])
+    normalized_key = video["normalized_path"]
+    normalized = db.normalized_local_path(normalized_key)
     frame_h = int(video["height"])
     fps = float(video["fps"])
 
@@ -145,15 +130,16 @@ def _process_one(
     # Climber + route resolution from the curated CSV (filename match).
     source_name = Path(video["source_path"]).name
     crow = curated.get(source_name)
-    climber_id = upsert_climber(client, crow.climber_name) if crow else None
-    route_id = _resolve_route(client, crow) if crow else None
+    climber_id = db.upsert_climber(crow.climber_name) if crow else None
+    route_id = _resolve_route(crow) if crow else None
 
     added = 0
     for i, bounds in enumerate(attempts):
         metrics = compute_metrics(
             bounds, track.com_xy, fps=fps, attempts_count=len(attempts)
         )
-        overlay_path = P.OVERLAYS_DIR / f"{video_id}_a{i}.mp4"
+        overlay_local = P.OVERLAYS_DIR / f"{video_id}_a{i}.mp4"
+        overlay_key: str | None = None
         try:
             render_overlay(
                 normalized, track, bounds,
@@ -163,14 +149,18 @@ def _process_one(
                     send=metrics.send,
                     climber_name=crow.climber_name if crow else None,
                 ),
-                overlay_path,
+                overlay_local,
             )
         except Exception:
             log.exception("overlay render failed for video %s attempt %s", video_id, i)
-            overlay_path = None
+        else:
+            try:
+                overlay_key = db.upload_overlay(overlay_local)
+            except Exception as e:
+                log.warning("overlay upload failed for %s: %s — using basename", overlay_local, e)
+                overlay_key = overlay_local.name
 
-        upsert_attempt(
-            client,
+        db.upsert_attempt(
             Attempt(
                 id=None,
                 video_id=video_id,
@@ -184,7 +174,7 @@ def _process_one(
                 send=metrics.send,
                 attempts_count=metrics.attempts_count,
                 route_source=RouteSource.MANUAL if route_id else RouteSource.UNASSIGNED,
-                overlay_path=str(overlay_path) if overlay_path else None,
+                overlay_path=overlay_key,
                 config_hash=cfg_hash,
             ),
         )
@@ -228,14 +218,13 @@ def _run_pose_stage(video_id: int, normalized: Path, cache_path: Path, cfg_hash:
     )
 
 
-def _resolve_route(client, crow: CuratedRow) -> int:
+def _resolve_route(crow: CuratedRow) -> int:
     """Find-or-create the (wall, route) pair for a curated row."""
-    wall_id = find_or_create_wall(client, crow.gym)
-    existing = find_route(client, wall_id, crow.color)
+    wall_id = db.find_or_create_wall(crow.gym)
+    existing = db.find_route(wall_id, crow.color)
     if existing is not None:
         return existing
-    return upsert_route(
-        client,
+    return db.upsert_route(
         Route(
             id=None, wall_id=wall_id, color=crow.color,
             origin=RouteSource.MANUAL,
@@ -245,15 +234,14 @@ def _resolve_route(client, crow: CuratedRow) -> int:
     )
 
 
-def _finalize_smoothness_percentiles(client, cfg_hash: str) -> None:
+def _finalize_smoothness_percentiles() -> None:
     """Recompute per-route smoothness percentiles using the frozen baseline strategy."""
-    del cfg_hash  # reserved for future invalidation; current strategy ignores it
-    for route_id in distinct_route_ids_with_attempts(client):
-        attempts = attempts_for_route(client, route_id)
+    for route_id in db.distinct_route_ids_with_attempts():
+        attempts = db.attempts_for_route(route_id)
         raws = [r["smoothness_raw"] for r in attempts]
         pcts = compute_route_percentiles(raws)
         for r, pct in zip(attempts, pcts, strict=True):
-            update_attempt_smoothness_pct(client, r["id"], pct)
+            db.update_attempt_smoothness_pct(r["id"], pct)
 
 
 def run_stage2() -> None:
@@ -265,13 +253,16 @@ def run_stage2() -> None:
 
 
 def verify_demo() -> list[str]:
-    """Walk the DB and stat() every referenced overlay path. Returns missing paths."""
-    client = connect(read_only=True)
+    """Check every overlay / sample frame referenced by the DB.
+
+    In Supabase mode this hits the Storage API; in SQLite mode it stats local
+    files. Returns the list of missing keys/paths.
+    """
     missing: list[str] = []
-    for overlay in overlay_paths_in_use(client):
-        if not Path(overlay).exists():
-            missing.append(overlay)
-    for frame in route_sample_frame_paths(client):
+    for key in db.overlay_paths_in_use():
+        if not db.overlay_exists(key):
+            missing.append(key)
+    for frame in db.route_sample_frame_paths():
         if not Path(frame).exists():
             missing.append(frame)
     return missing

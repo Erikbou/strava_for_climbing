@@ -112,6 +112,18 @@ create or replace view route_with_attempt_counts as
     left join attempt a on a.route_id = r.id
    group by r.id;
 
+-- Storage buckets for normalized clips and overlay clips.
+-- Public so st.video can stream by URL without minting signed tokens.
+-- Pipeline writes use the service-role key, which bypasses RLS on
+-- storage.objects; for production tighten with per-role policies.
+insert into storage.buckets (id, name, public)
+values ('normalized', 'normalized', true)
+on conflict (id) do update set public = excluded.public;
+
+insert into storage.buckets (id, name, public)
+values ('overlays', 'overlays', true)
+on conflict (id) do update set public = excluded.public;
+
 -- RLS is OFF for these tables by default when created via the SQL editor.
 -- For production, enable RLS and add policies appropriate for your roles:
 --   alter table attempt enable row level security;

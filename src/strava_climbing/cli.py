@@ -12,6 +12,7 @@ import typer
 from . import ingest as ingest_mod
 from . import orchestrate
 from .config import paths as P
+from .config import runtime as R
 
 app = typer.Typer(
     add_completion=False,
@@ -52,8 +53,6 @@ def process(
     force: bool = typer.Option(False, "--force", help="Re-process even if manifest matches."),
 ) -> None:
     """Run pose -> boundaries -> metrics -> overlay over all successfully ingested videos."""
-    from .config import runtime as R
-
     stats = orchestrate.process_all(force=force)
     typer.echo(f"process done: {stats}")
     if not R.stage2_enabled():
@@ -69,7 +68,8 @@ def demo(
 
     env = os.environ.copy()
     env["STRAVA_CLIMBING_MODE"] = "demo"
-    typer.echo("demo mode: read-only against Supabase")
+    backend = "Supabase" if R.use_supabase() else "local SQLite"
+    typer.echo(f"demo mode: read-only against {backend}")
     app_file = P.REPO_ROOT / "apps" / "streamlit" / "main.py"
     cmd = [sys.executable, "-m", "streamlit", "run", str(app_file), "--server.port", str(port)]
     subprocess.run(cmd, env=env, check=False)
@@ -90,15 +90,27 @@ def verify_demo() -> None:
 
 @app.command("init-db")
 def init_db_cmd() -> None:
-    """Print instructions for applying the Supabase schema migration."""
-    migration = P.REPO_ROOT / "supabase" / "migrations" / "0001_initial_schema.sql"
-    typer.echo(
-        "Supabase schema is applied out-of-band. Paste this file into the "
-        "Supabase Dashboard → SQL Editor and run it:\n"
-        f"  {migration}\n"
-        "Or, if you use the Supabase CLI:\n"
-        "  supabase db push"
-    )
+    """Initialize the active persistence backend.
+
+    Supabase: prints the migration path (DDL must be applied via the SQL editor
+    or ``supabase db push``). SQLite: creates ``data/climbing.sqlite`` and the
+    schema in-place.
+    """
+    from . import db
+
+    if R.use_supabase():
+        migration = P.REPO_ROOT / "supabase" / "migrations" / "0001_initial_schema.sql"
+        typer.echo(
+            "Supabase mode. Schema is applied out-of-band — paste this file into "
+            "the Supabase Dashboard → SQL Editor and run it:\n"
+            f"  {migration}\n"
+            "Or, if you use the Supabase CLI:\n"
+            "  supabase db push"
+        )
+        return
+
+    db.init_db()
+    typer.echo(f"sqlite ready at {P.DATA_ROOT / 'climbing.sqlite'}")
 
 
 if __name__ == "__main__":  # pragma: no cover

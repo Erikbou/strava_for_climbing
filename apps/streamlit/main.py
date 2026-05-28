@@ -136,17 +136,31 @@ def _render_attempt(attempt_id: int, *, title: str) -> None:
         st.warning(f"{title}: attempt not found")
         return
     st.markdown(f"**{title}** — {a.get('climber_name') or '—'}")
-    overlay = a.get("overlay_path")
-    if overlay and Path(overlay).exists():
-        with open(overlay, "rb") as f:
-            st.video(f, format="video/mp4")
+    overlay_key = a.get("overlay_path")
+    if overlay_key:
+        src = queries.overlay_playback_source(overlay_key)
+        if isinstance(src, Path):
+            if src.exists():
+                with open(src, "rb") as f:
+                    st.video(f, format="video/mp4")
+            else:
+                st.warning("Overlay missing locally — re-run `strava process`.")
+        else:
+            st.video(src, format="video/mp4")
     else:
-        st.warning("Overlay missing — Streamlit cannot run inference live. "
-                   "Re-run `strava process` to regenerate.")
-        normalized = a.get("normalized_path")
-        if normalized and Path(normalized).exists():
-            with open(normalized, "rb") as f:
-                st.video(f, format="video/mp4")
+        st.warning(
+            "Overlay missing — Streamlit cannot run inference live. "
+            "Re-run `strava process` to regenerate."
+        )
+        normalized_key = a.get("normalized_path")
+        if normalized_key:
+            src = queries.normalized_playback_source(normalized_key)
+            if isinstance(src, Path):
+                if src.exists():
+                    with open(src, "rb") as f:
+                        st.video(f, format="video/mp4")
+            else:
+                st.video(src, format="video/mp4")
 
     metrics_cols = st.columns(3)
     metrics_cols[0].metric("Time", f"{a['time_seconds']:.1f}s")
