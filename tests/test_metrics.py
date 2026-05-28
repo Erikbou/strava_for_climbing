@@ -1,7 +1,5 @@
 import math
 
-import numpy as np
-
 from strava_climbing.boundary_detection import find_attempts
 from strava_climbing.metrics import (
     compute_metrics,
@@ -26,7 +24,7 @@ def test_percentiles_low_jerk_ranks_high():
     pcts = compute_route_percentiles(raws)
     assert pcts[0] is not None and pcts[-1] is not None
     assert pcts[0] > pcts[-1], "lower raw jerk should map to higher percentile"
-    assert 0.0 <= min(p for p in pcts if p is not None)
+    assert min(p for p in pcts if p is not None) >= 0.0
     assert max(p for p in pcts if p is not None) <= 100.0
 
 
@@ -40,7 +38,7 @@ def test_frozen_baseline_keeps_old_scores_stable():
     first_run = compute_route_percentiles(baseline)
     # Add a new "fast" attempt. With a frozen baseline, the previously-computed
     # percentiles for the original four don't change.
-    new_attempts = baseline + [0.5]
+    new_attempts = [*baseline, 0.5]
     rerun = compute_route_percentiles(new_attempts, frozen_baseline=baseline)
     assert rerun[:4] == first_run
 

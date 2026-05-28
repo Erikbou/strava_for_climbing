@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .provenance import RouteSource
-from .schema import Attempt, Climber, Route, Video
+from .schema import Attempt, Route, Video
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS climber (
@@ -279,14 +279,14 @@ def _row_to_video(row: sqlite3.Row) -> Video:
 
 __all__ = [
     "SCHEMA_SQL",
+    "RouteSource",
     "connect",
-    "init_db",
-    "upsert_climber",
-    "upsert_video",
     "get_video_by_sha",
-    "upsert_attempt",
-    "upsert_route",
+    "init_db",
     "leaderboard",
     "list_routes",
-    "RouteSource",
+    "upsert_attempt",
+    "upsert_climber",
+    "upsert_route",
+    "upsert_video",
 ]

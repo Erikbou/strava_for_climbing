@@ -287,9 +287,9 @@ def have_ffmpeg() -> bool:
 
 
 __all__ = [
-    "sha256_file",
-    "probe_video",
-    "normalize_video",
-    "ingest_directory",
     "have_ffmpeg",
+    "ingest_directory",
+    "normalize_video",
+    "probe_video",
+    "sha256_file",
 ]

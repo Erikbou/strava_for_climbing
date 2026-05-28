@@ -180,8 +180,8 @@ def _save_cache(path: Path, tracks: dict[int, PoseTrack], n_frames: int) -> None
 __all__ = [
     "N_KP",
     "PoseTrack",
-    "run_pose",
+    "estimate_com",
     "load_pose_cache",
     "pick_climber_track",
-    "estimate_com",
+    "run_pose",
 ]
