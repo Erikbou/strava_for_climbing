@@ -22,13 +22,13 @@ from strava_climbing import orchestrate
 from strava_climbing.config import gym as G
 from strava_climbing.config import paths as P
 
-STRAVA_ORANGE = "#FC4C02"
+ARTEMIS_ORANGE = "#ff9a1f"
 
 # Stable palette for color swatches in badges (matches CSS rules in main.py).
 _COLOR_SWATCHES = {
-    "white": "#F5F5F5", "yellow": "#F5C400", "orange": "#FC4C02",
+    "white": "#F5F5F5", "yellow": "#F5C400", "orange": "#ff9a1f",
     "green": "#2EA44F", "blue": "#1F6FEB", "red": "#D7263D",
-    "purple": "#7C3AED", "black": "#1F2328", "pink": "#EC4899",
+    "purple": "#7C3AED", "black": "#111", "pink": "#EC4899",
 }
 
 
@@ -226,23 +226,23 @@ def post_view(attempt_id: int) -> None:
         "margin-bottom: 16px;"
     )
     title_style = (
-        "margin: 0 0 6px 0; font-size: 28px; font-weight: 800; color: #1F2328;"
+        "margin: 0 0 6px 0; font-size: 28px; font-weight: 800; color: #111;"
     )
     st.markdown(
         f"""
         <div class="activity-head" style="{header_style}">
           {_avatar(climber, size="lg")}
           <div class="meta">
-            <div style="font-size:20px;font-weight:800;color:#1F2328;">{climber}</div>
-            <div style="font-size:13px;color:#8A8F98;">{age} · {gym}</div>
+            <div style="font-size:20px;font-weight:800;color:#111;">{climber}</div>
+            <div style="font-size:13px;color:#6B6B6F;">{age} · {gym}</div>
           </div>
           <div>{_send_badge(bool(a['send']))}</div>
         </div>
         <h1 style="{title_style}">{title}</h1>
         <div style="margin-bottom: 8px;">
           {_color_badge(color)} &nbsp;
-          <span style="font-size:20px;font-weight:800;color:#FC4C02;">{grade}</span>
-          <span style="color:#8A8F98;font-size:13px;">· {grade_label}</span>
+          <span style="font-size:20px;font-weight:800;color:#ff9a1f;">{grade}</span>
+          <span style="color:#6B6B6F;font-size:13px;">· {grade_label}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -327,9 +327,9 @@ def profile_view(climber_id: int) -> None:
                 <div style="display:flex;align-items:center;gap:12px;">
                   <div style="flex:1;min-width:0;">
                     {_color_badge(color)}
-                    &nbsp; <strong style="color:#1F2328;">{_grade_for(color)}</strong>
+                    &nbsp; <strong style="color:#111;">{_grade_for(color)}</strong>
                     &nbsp; {_send_badge(bool(r['send']))}
-                    <div style="color:#8A8F98;font-size:12px;margin-top:6px;">
+                    <div style="color:#6B6B6F;font-size:12px;margin-top:6px;">
                       {age} · {gym} · {r['time_seconds']:.1f}s
                     </div>
                   </div>
@@ -351,10 +351,10 @@ def upload_view() -> None:
     back_button()
     st.markdown(
         """
-        <h1 style="font-size:28px;font-weight:800;color:#1F2328;margin:8px 0 4px 0;">
+        <h1 style="font-size:28px;font-weight:800;color:#111;margin:8px 0 4px 0;">
           Upload a climb
         </h1>
-        <p style="color:#8A8F98;font-size:14px;margin:0 0 18px 0;">
+        <p style="color:#6B6B6F;font-size:14px;margin:0 0 18px 0;">
           30-90 second portrait clip works best. We'll detect pose, time the
           send, score smoothness, and cut a highlight.
         </p>
@@ -387,14 +387,14 @@ def upload_view() -> None:
                 st.markdown(
                     f"""
                     <div style="padding:10px 0;">
-                      <div style="color:#8A8F98;font-size:11px;text-transform:uppercase;
+                      <div style="color:#6B6B6F;font-size:11px;text-transform:uppercase;
                                   letter-spacing:0.5px;font-weight:700;">
                         Inferred grade
                       </div>
-                      <div style="font-size:24px;font-weight:800;color:#FC4C02;">
+                      <div style="font-size:24px;font-weight:800;color:#ff9a1f;">
                         {grade_preview['grade']}
                       </div>
-                      <div style="color:#8A8F98;font-size:13px;">{grade_preview['label']}</div>
+                      <div style="color:#6B6B6F;font-size:13px;">{grade_preview['label']}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
