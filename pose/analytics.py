@@ -8,12 +8,13 @@ since world landmarks are hip-rooted and carry no global translation.
 from __future__ import annotations
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .schema import MovementSequence, LANDMARK_INDEX
 from . import geometry as geo
+from .schema import LANDMARK_INDEX, MovementSequence
 
 _SMOOTH = 7
 
@@ -59,13 +60,15 @@ def plot_analytics(seq: MovementSequence, out_path: str) -> str:
     ax.plot(t, m["elbow_left"], label="left", color="#3ca0ff")
     ax.plot(t, m["elbow_right"], label="right", color="#ff7a3c")
     ax.set_ylabel("elbow angle (deg)")
-    ax.legend(loc="upper right"); ax.grid(alpha=0.3)
+    ax.legend(loc="upper right")
+    ax.grid(alpha=0.3)
 
     ax = axes[1]
     ax.plot(t, m["knee_left"], label="left", color="#3ca0ff")
     ax.plot(t, m["knee_right"], label="right", color="#ff7a3c")
     ax.set_ylabel("knee angle (deg)")
-    ax.legend(loc="upper right"); ax.grid(alpha=0.3)
+    ax.legend(loc="upper right")
+    ax.grid(alpha=0.3)
 
     ax = axes[2]
     ax.plot(t, m["progress"], color="#43c463")

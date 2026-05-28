@@ -5,8 +5,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .schema import MovementSequence, POSE_CONNECTIONS, LANDMARK_INDEX, LANDMARK_NAMES
 from . import geometry as geo
+from .schema import LANDMARK_INDEX, LANDMARK_NAMES, POSE_CONNECTIONS, MovementSequence
 
 _VIS_THRESH = 0.4
 

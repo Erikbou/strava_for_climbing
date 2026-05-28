@@ -8,7 +8,7 @@ climb. Downstream comparison/similarity features should consume this — not raw
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -107,7 +107,7 @@ class MovementSequence:
             json.dump(payload, f)
 
     @classmethod
-    def load_npz(cls, path: str) -> "MovementSequence":
+    def load_npz(cls, path: str) -> MovementSequence:
         d = np.load(path)
         return cls(
             fps=float(d["fps"]),
