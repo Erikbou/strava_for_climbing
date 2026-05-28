@@ -25,6 +25,7 @@ uv.lock.bak
 data/raw/*
 data/normalized/*
 data/overlays/*
+data/highlights/*
 data/cache/*
 data/manifests/*
 data/*.sqlite
@@ -61,3 +62,6 @@ notebooks/.ipynb_checkpoints/
 .env.local
 .specific
 specific.local
+
+# Claude Code local config
+.claude/

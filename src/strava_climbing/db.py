@@ -110,6 +110,17 @@ CREATE INDEX IF NOT EXISTS idx_route_origin    ON route(origin);
 CREATE INDEX IF NOT EXISTS idx_route_wall      ON route(wall_id);
 CREATE INDEX IF NOT EXISTS idx_hold_wall_route ON hold(wall_id, route_id);
 
+-- Likes (kudos). No auth yet, so identity is a per-browser session id
+-- generated in Streamlit and stored in st.session_state. The PK guarantees
+-- one like per session per attempt.
+CREATE TABLE IF NOT EXISTS kudos (
+  attempt_id INTEGER NOT NULL REFERENCES attempt(id) ON DELETE CASCADE,
+  session_id TEXT    NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (attempt_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kudos_attempt ON kudos(attempt_id);
+
 CREATE OR REPLACE FUNCTION trg_attempt_protect_manual_fn() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
