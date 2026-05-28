@@ -45,9 +45,13 @@ def go(view: str, **params: Any) -> None:
     st.rerun()
 
 
-def back_button(label: str = "Back to feed") -> None:
-    if st.button(label, key=f"back-{label}", type="secondary"):
-        go("feed")
+def back_button(label: str = "back to feed") -> None:
+    st.markdown("<div class='back-link'>", unsafe_allow_html=True)
+    try:
+        if st.button(label, key=f"back-{label}", type="secondary"):
+            go("feed")
+    finally:
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------

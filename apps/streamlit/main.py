@@ -72,14 +72,23 @@ st.markdown(
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
       }
-      h1, h2, h3, h4, p, span, div { letter-spacing: -0.005em; }
+      h1, h2, h3, h4 { line-height: 1.2; letter-spacing: -0.015em; }
+      p, span, div { letter-spacing: -0.005em; line-height: 1.45; }
+
+      /* Tabular numbers in every stat tile so digits align vertically. */
+      .stat-row .tile .value,
+      .stat-grid .tile .value,
+      [data-testid="stMetricValue"] {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+      }
 
       /* ---------- Streamlit containers become activity cards ---------- */
       [data-testid="stVerticalBlockBorderWrapper"] {
         background: var(--bg) !important;
         border: 1px solid var(--hairline) !important;
         border-radius: 18px !important;
-        margin-bottom: var(--s-4) !important;
+        margin-bottom: var(--s-3) !important;
         padding: 0 !important;
         box-shadow: 0 1px 2px rgba(17,17,17,0.03);
         overflow: hidden;
@@ -319,6 +328,50 @@ st.markdown(
         border-bottom: 1px solid var(--hairline);
       }
 
+      /* ---------- Active nav state ---------- */
+      .nav-active .stButton > button {
+        background: linear-gradient(180deg,
+          rgba(255,184,74,0.10) 0%, rgba(255,154,31,0.10) 100%) !important;
+        border-color: rgba(255,154,31,0.45) !important;
+        color: var(--orange-3) !important;
+      }
+
+      /* ---------- Lighter back-link button ---------- */
+      .back-link .stButton > button {
+        background: transparent !important;
+        border: none !important;
+        color: var(--muted) !important;
+        font-weight: 700 !important;
+        padding: 6px 0 !important;
+        min-height: 32px !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+      }
+      .back-link .stButton > button:hover {
+        color: var(--ink) !important;
+        filter: none;
+        border: none !important;
+      }
+
+      /* ---------- Form density ---------- */
+      [data-testid="stForm"] {
+        background: var(--bg) !important;
+        border: 1px solid var(--hairline) !important;
+        border-radius: 18px !important;
+        padding: var(--s-4) var(--card-pad-x) !important;
+      }
+      .stTextInput, .stSelectbox, [data-testid="stFileUploader"] {
+        margin-bottom: var(--s-3) !important;
+      }
+      .stTextInput label, .stSelectbox label,
+      [data-testid="stFileUploader"] label {
+        font-size: 11px !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.4px;
+        text-transform: lowercase;
+        color: var(--muted) !important;
+      }
+
       /* ---------- Reduced motion ---------- */
       @media (prefers-reduced-motion: reduce) {
         .stButton > button,
@@ -358,6 +411,8 @@ def _brand_bar() -> None:
         )
     with cols[1]:
         st.write("")
+        if view == "feed":
+            st.markdown("<div class='nav-active'>", unsafe_allow_html=True)
         if st.button(
             "home",
             key="brand-home",
@@ -367,9 +422,25 @@ def _brand_bar() -> None:
             st.query_params.clear()
             st.query_params["view"] = "feed"
             st.rerun()
+        if view == "feed":
+            st.markdown("</div>", unsafe_allow_html=True)
     with cols[2]:
         st.write("")
-        if view != "upload" and st.button(
+        # On the upload view the CTA becomes a "you are here" pill — secondary
+        # styling with the nav-active highlight; off-upload it's the full
+        # gradient primary CTA so the call-to-action still pops.
+        if view == "upload":
+            st.markdown("<div class='nav-active'>", unsafe_allow_html=True)
+            if st.button(
+                "uploading",
+                key="brand-upload-here",
+                type="secondary",
+                use_container_width=True,
+                disabled=True,
+            ):
+                pass
+            st.markdown("</div>", unsafe_allow_html=True)
+        elif st.button(
             "+ upload",
             key="brand-upload",
             type="primary",
