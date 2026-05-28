@@ -59,17 +59,16 @@ def read_curated_csv(path: Path) -> dict[str, CuratedRow]:
     return out
 
 
-def process_all(*, db_path: Path | None = None, force: bool = False) -> dict:
+def process_all(*, force: bool = False) -> dict:
     """Run the full Stage-1 pipeline across all successfully ingested videos."""
     P.ensure_dirs()
-    db = db_path or P.DB_PATH
-    init_db(db)
+    init_db()
 
     curated = read_curated_csv(P.DATA_ROOT / "curated_subset.csv")
     cfg_hash = current_config_hash()
     stats = {"videos": 0, "attempts": 0, "skipped": 0, "errored": 0}
 
-    with connect(db) as conn:
+    with connect() as conn:
         videos = conn.execute(
             "SELECT id, source_path, normalized_path, height, fps "
             "FROM video WHERE ingest_status = 'ok'"
@@ -101,7 +100,7 @@ def process_all(*, db_path: Path | None = None, force: bool = False) -> dict:
 
     if R.stage2_enabled():
         try:
-            run_stage2(db_path=db)
+            run_stage2()
         except ImportError as e:
             log.warning("stage 2 disabled (missing deps): %s", e)
         except Exception:
@@ -232,17 +231,18 @@ def _run_pose_stage(video_id: int, normalized: Path, cache_path: Path, cfg_hash:
 def _resolve_route(conn, crow: CuratedRow) -> int:
     """Find-or-create the (wall, route) pair for a curated row."""
     wall_row = conn.execute(
-        "SELECT id FROM wall WHERE gym_name = ?", (crow.gym,)
+        "SELECT id FROM wall WHERE gym_name = %s", (crow.gym,)
     ).fetchone()
     if wall_row is None:
         wall_id = conn.execute(
-            "INSERT INTO wall(gym_name) VALUES (?) RETURNING id", (crow.gym,)
-        ).fetchone()[0]
+            "INSERT INTO wall(gym_name) VALUES (%s) RETURNING id", (crow.gym,)
+        ).fetchone()["id"]
     else:
         wall_id = wall_row["id"]
 
     row = conn.execute(
-        "SELECT id FROM route WHERE wall_id = ? AND color IS ?", (wall_id, crow.color)
+        "SELECT id FROM route WHERE wall_id = %s AND color IS NOT DISTINCT FROM %s",
+        (wall_id, crow.color),
     ).fetchone()
     if row is not None:
         return row["id"]
@@ -264,7 +264,7 @@ def _finalize_smoothness_percentiles(conn, cfg_hash: str) -> None:
         route_id = row["route_id"]
         attempts = conn.execute(
             "SELECT id, smoothness_raw FROM attempt "
-            "WHERE route_id = ? AND smoothness_raw IS NOT NULL "
+            "WHERE route_id = %s AND smoothness_raw IS NOT NULL "
             "ORDER BY id ASC",
             (route_id,),
         ).fetchall()
@@ -272,12 +272,12 @@ def _finalize_smoothness_percentiles(conn, cfg_hash: str) -> None:
         pcts = compute_route_percentiles(raws)
         for r, pct in zip(attempts, pcts, strict=True):
             conn.execute(
-                "UPDATE attempt SET smoothness_pct = ? WHERE id = ?",
+                "UPDATE attempt SET smoothness_pct = %s WHERE id = %s",
                 (pct, r["id"]),
             )
 
 
-def run_stage2(*, db_path: Path | None = None) -> None:
+def run_stage2() -> None:
     """Hold detection + route auto-matching. Lazy-imports the ``routes`` package
     so a missing transformers / torch install does not break Stage 1.
     """
@@ -285,11 +285,10 @@ def run_stage2(*, db_path: Path | None = None) -> None:
     raise NotImplementedError("Stage 2 not yet implemented")
 
 
-def verify_demo(*, db_path: Path | None = None) -> list[str]:
+def verify_demo() -> list[str]:
     """Walk the DB and stat() every referenced overlay path. Returns missing paths."""
-    db = db_path or P.DEMO_DB_PATH if (P.DEMO_DB_PATH).exists() else (db_path or P.DB_PATH)
     missing: list[str] = []
-    with connect(db, read_only=True) as conn:
+    with connect(read_only=True) as conn:
         for row in conn.execute(
             "SELECT id, overlay_path FROM attempt WHERE overlay_path IS NOT NULL"
         ).fetchall():

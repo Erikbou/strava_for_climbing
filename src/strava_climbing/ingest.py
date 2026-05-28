@@ -171,21 +171,20 @@ def _write_report(entries: list[IngestReportEntry]) -> None:
     P.INGEST_REPORT_PATH.write_text(json.dumps(payload, indent=2))
 
 
-def ingest_directory(raw_dir: Path | None = None, *, db_path: Path | None = None) -> dict:
+def ingest_directory(raw_dir: Path | None = None) -> dict:
     """Top-level orchestration. Idempotent on source-file SHA-256."""
     raw = raw_dir or P.RAW_DIR
-    db = db_path or P.DB_PATH
     P.ensure_dirs()
 
     from .db import init_db  # local import to avoid circulars when tests import ingest
 
-    init_db(db)
+    init_db()
 
     use_vt = _detect_videotoolbox()
     entries: list[IngestReportEntry] = []
     stats = {"seen": 0, "ok": 0, "skipped": 0, "rejected": 0, "errored": 0}
 
-    with connect(db) as conn:
+    with connect() as conn:
         for src in sorted(raw.iterdir()):
             if not src.is_file() or src.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue

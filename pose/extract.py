@@ -7,13 +7,12 @@ produce per-frame 2D pixel and 3D world landmarks.
 
 from __future__ import annotations
 
-import os
 import subprocess
 
 import cv2
 import numpy as np
 
-from .schema import MovementSequence, NUM_LANDMARKS
+from .schema import NUM_LANDMARKS, MovementSequence
 
 
 def transcode(src: str, dst: str, max_dim: int = 1280, fps: int = 30) -> str:

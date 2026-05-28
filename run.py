@@ -11,10 +11,9 @@ import argparse
 import os
 import time
 
-from pose.extract import transcode, extract_pose
-from pose.visualize import render_overlay
 from pose.analytics import plot_analytics
-from pose.schema import MovementSequence
+from pose.extract import extract_pose, transcode
+from pose.visualize import render_overlay
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
