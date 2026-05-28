@@ -1,60 +1,78 @@
-"""Schema + trigger integration tests using an in-memory SQLite database."""
+"""Schema + trigger integration tests against a Postgres instance.
+
+Requires ``DATABASE_URL`` (set automatically by ``specific dev``/``specific exec``).
+Tests are skipped if no DB is available.
+"""
 
 from __future__ import annotations
 
-import sqlite3
+import os
 
 import pytest
 
-from strava_climbing.db import (
+psycopg = pytest.importorskip("psycopg")
+
+from strava_climbing.db import (  # noqa: E402
     SCHEMA_SQL,
+    connect,
     leaderboard,
     upsert_attempt,
     upsert_climber,
     upsert_route,
     upsert_video,
 )
-from strava_climbing.provenance import RouteSource
-from strava_climbing.schema import Attempt, Route, Video
+from strava_climbing.provenance import RouteSource  # noqa: E402
+from strava_climbing.schema import Attempt, Route, Video  # noqa: E402
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set (run inside `specific dev` / `specific exec`)",
+)
+
+# Names of every persistent object created by SCHEMA_SQL — used to wipe between tests.
+_TABLES = ("attempt", "hold", "route", "wall", "video", "climber")
 
 
-def _mem() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA_SQL)
-    return conn
+@pytest.fixture
+def conn():
+    """Open a connection, apply schema, truncate all tables before yielding."""
+    c = connect()
+    c.execute(SCHEMA_SQL)
+    c.execute(f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
+    try:
+        yield c
+    finally:
+        c.close()
 
 
-def test_schema_creates_cleanly():
-    conn = _mem()
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()}
-    assert tables == {"climber", "video", "wall", "route", "attempt", "hold"}
+def test_schema_creates_cleanly(conn):
+    rows = conn.execute(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = ANY(%s)",
+        (list(_TABLES),),
+    ).fetchall()
+    names = {r["table_name"] for r in rows}
+    assert names == set(_TABLES)
 
 
-def test_upsert_climber_idempotent():
-    conn = _mem()
+def test_upsert_climber_idempotent(conn):
     a = upsert_climber(conn, "Erik")
     b = upsert_climber(conn, "Erik")
     assert a == b
 
 
-def test_video_dedup_by_source_sha256():
-    conn = _mem()
+def test_video_dedup_by_source_sha256(conn):
     v1 = Video(None, "/raw/a.mov", "/norm/a.mp4", "sha-abc", 30.0, 1280, 720, 30.0, "ok", None)
     id1 = upsert_video(conn, v1)
-    # Same sha, different paths -> upsert should reuse the id.
     v2 = Video(None, "/raw/b.mov", "/norm/b.mp4", "sha-abc", 30.0, 1280, 720, 30.0, "ok", None)
     id2 = upsert_video(conn, v2)
     assert id1 == id2
 
 
-def test_manual_route_trigger_blocks_overwrite():
-    conn = _mem()
-    conn.execute("INSERT INTO wall(gym_name) VALUES ('Klättercentret')")
-    wall_id = conn.execute("SELECT id FROM wall").fetchone()[0]
+def test_manual_route_trigger_blocks_overwrite(conn):
+    wall_id = conn.execute(
+        "INSERT INTO wall(gym_name) VALUES ('Klättercentret') RETURNING id"
+    ).fetchone()["id"]
     climber_id = upsert_climber(conn, "Niklavs")
     video_id = upsert_video(
         conn,
@@ -73,17 +91,16 @@ def test_manual_route_trigger_blocks_overwrite():
             route_source=RouteSource.MANUAL, config_hash="cfg-1",
         ),
     )
-    # Try to flip the manual route_source to auto — the TRIGGER must abort.
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(psycopg.errors.RaiseException):
         conn.execute(
-            "UPDATE attempt SET route_source = 'auto' WHERE route_id = ?", (route_id,)
+            "UPDATE attempt SET route_source = 'auto' WHERE route_id = %s", (route_id,)
         )
 
 
-def test_leaderboard_orders_sends_first():
-    conn = _mem()
-    conn.execute("INSERT INTO wall(gym_name) VALUES ('K')")
-    wall_id = conn.execute("SELECT id FROM wall").fetchone()[0]
+def test_leaderboard_orders_sends_first(conn):
+    wall_id = conn.execute(
+        "INSERT INTO wall(gym_name) VALUES ('K') RETURNING id"
+    ).fetchone()["id"]
     erik = upsert_climber(conn, "Erik")
     emil = upsert_climber(conn, "Emil")
     video_id = upsert_video(
@@ -106,7 +123,6 @@ def test_leaderboard_orders_sends_first():
             ),
         )
     rows = leaderboard(conn, route_id)
-    # Sends first (Emil 3.0, Erik 5.0), then fails (Emil 4.0).
     assert [r["climber_name"] for r in rows] == ["Emil", "Erik", "Emil"]
-    assert rows[0]["send"] == 1
+    assert rows[0]["send"] is True
     assert rows[0]["time_seconds"] == 3.0

@@ -63,13 +63,11 @@ def process(
 def demo(
     port: int = typer.Option(8501, "--port"),
 ) -> None:
-    """Launch the Streamlit dashboard. Sets STRAVA_CLIMBING_MODE=demo if a frozen DB exists."""
+    """Launch the Streamlit dashboard. Sets STRAVA_CLIMBING_MODE=demo for read-only display."""
     import os
 
     env = os.environ.copy()
-    if P.DEMO_DB_PATH.exists():
-        env["STRAVA_CLIMBING_MODE"] = "demo"
-        typer.echo(f"demo mode: reading {P.DEMO_DB_PATH}")
+    env["STRAVA_CLIMBING_MODE"] = "demo"
     app_file = P.REPO_ROOT / "apps" / "streamlit" / "main.py"
     cmd = [sys.executable, "-m", "streamlit", "run", str(app_file), "--server.port", str(port)]
     subprocess.run(cmd, env=env, check=False)
@@ -90,12 +88,12 @@ def verify_demo() -> None:
 
 @app.command("init-db")
 def init_db_cmd() -> None:
-    """Create the SQLite database and schema. Idempotent; ingest also calls this."""
+    """Apply the schema to the database pointed at by DATABASE_URL. Idempotent."""
     from .db import init_db
 
     P.ensure_dirs()
-    init_db(P.DB_PATH)
-    typer.echo(f"db ready at {P.DB_PATH}")
+    init_db()
+    typer.echo("schema applied to DATABASE_URL")
 
 
 if __name__ == "__main__":  # pragma: no cover

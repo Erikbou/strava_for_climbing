@@ -6,11 +6,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import queries  # streamlit runs this file as a script; the script dir is on sys.path
 import streamlit as st
 
 from strava_climbing.config import runtime as R
-
-from . import queries
 
 st.set_page_config(
     page_title="Strava for Climbing",
