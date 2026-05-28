@@ -114,10 +114,16 @@ def normalize_video(
 
     hdr_filter = ""
     if is_hdr:
+        # HDR (HLG/PQ, bt2020) -> SDR bt709 for the downstream CV pipeline.
+        # 1) input transfer -> linear (required for correct tonemapping),
+        # 2) Hable tonemap HDR -> SDR,
+        # 3) target bt709 transfer/matrix/primaries.
+        # (Previous form passed `m=i` to zscale which is rejected as an invalid
+        # matrix value, so every HDR clip errored at ingest.)
         hdr_filter = (
-            "zscale=matrix=bt709:transfer=bt709:primaries=bt709:m=i:npl=1000,"
+            "zscale=transfer=linear:npl=100,"
             "tonemap=tonemap=hable:desat=0:peak=400,"
-            "zscale=matrix=bt709:transfer=bt709:primaries=bt709,"
+            "zscale=transfer=bt709:matrix=bt709:primaries=bt709,"
         )
 
     vf = f"{scale_filter},{pad_filter},{hdr_filter}{fmt_filter},{pts_filter}"
