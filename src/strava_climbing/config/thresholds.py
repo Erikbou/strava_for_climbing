@@ -7,6 +7,8 @@ parameter change re-emits attempts on the next ``process`` run.
 
 from __future__ import annotations
 
+import os
+
 # --- Ingest ---------------------------------------------------------------------------
 TARGET_FPS = 30
 TARGET_MAX_LONG_EDGE = 1280  # 720p downsample at ingest (Addendum §E)
@@ -14,10 +16,13 @@ MIN_VIDEO_DURATION_S = 5.0
 MAX_VIDEO_DURATION_S = 5 * 60.0  # auto-trim past this
 
 # --- Pose + tracking -----------------------------------------------------------------
-POSE_MODEL = "yolo11l-pose.pt"  # downgrade from 11x per perf review (Addendum §E)
+# yolo11n-pose is ~10x faster than 11l on CPU; the accuracy hit doesn't matter
+# for our metrics (CoM trajectory + ankle/wrist position). Override with
+# STRAVA_CLIMBING_POSE_MODEL=yolo11l-pose.pt if you have a GPU.
+POSE_MODEL = os.environ.get("STRAVA_CLIMBING_POSE_MODEL", "yolo11n-pose.pt")
 POSE_CONF = 0.35
 POSE_IOU = 0.5
-POSE_IMGSZ = 720
+POSE_IMGSZ = int(os.environ.get("STRAVA_CLIMBING_POSE_IMGSZ", "480"))
 
 # --- Attempt boundary detection ------------------------------------------------------
 # Portrait-clip assumption: climber occupies most of frame; brief ankle dropouts
