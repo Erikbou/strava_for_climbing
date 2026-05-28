@@ -23,10 +23,13 @@ import hashlib
 import os
 import re
 import sys
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import (
+    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -65,7 +68,36 @@ def _require_service_key(
         raise HTTPException(status_code=401, detail="bad service key")
 
 
-app = FastAPI(title="artemis-api", version="0.1.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Bootstrap the schema once before serving any request. Retries a few
+    times so the api can start before postgres is fully reachable — Specific
+    orders services but a cold-start can still race the listener."""
+    _bootstrap_schema()
+    yield
+
+
+def _bootstrap_schema() -> None:
+    from strava_climbing.db import init_db
+
+    last_err: Exception | None = None
+    for attempt_n in range(1, 11):
+        try:
+            init_db()
+            print("schema: bootstrapped", file=sys.stderr)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            wait = min(0.5 * attempt_n, 3.0)
+            print(
+                f"schema: init failed (attempt {attempt_n}): {exc!r}; retrying in {wait:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+    raise RuntimeError(f"schema bootstrap failed after 10 attempts: {last_err!r}")
+
+
+app = FastAPI(title="artemis-api", version="0.1.0", lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +122,12 @@ def schema_init() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Upload + pipeline
+# Upload + pipeline (async via background task + job table)
 # ---------------------------------------------------------------------------
 
 @app.post("/process-upload", dependencies=[Depends(_require_service_key)])
 async def process_upload(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     climber: str = Form(...),
     gym: str = Form(""),
@@ -113,15 +146,133 @@ async def process_upload(
     raw_path = raw_dir / f"{sha[:12]}{suffix}"
     raw_path.write_bytes(raw_bytes)
 
+    payload = {
+        "raw_path": str(raw_path),
+        "climber": climber.strip(),
+        "gym": gym.strip(),
+        "color": (color or None),
+        "title": (title.strip() if title else None),
+        "user_id": user_id if isinstance(user_id, int) else None,
+    }
+    job_id = _create_job("process_upload", payload, user_id if isinstance(user_id, int) else None)
+
+    background_tasks.add_task(_run_process_upload_job, job_id, payload)
+
+    return JSONResponse({"job_id": job_id, "status": "queued"})
+
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: int) -> JSONResponse:
+    job = _fetch_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return JSONResponse(job)
+
+
+def _create_job(kind: str, payload: dict[str, Any], user_id: int | None) -> int:
+    import json
+
+    from strava_climbing.db import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO job(kind, status, payload, user_id)
+            VALUES (%s, 'queued', %s::jsonb, %s)
+            RETURNING id
+            """,
+            (kind, json.dumps(payload), user_id),
+        ).fetchone()
+    if not row:
+        raise RuntimeError("failed to insert job row")
+    return int(row["id"])
+
+
+def _fetch_job(job_id: int) -> dict[str, Any] | None:
+    from strava_climbing.db import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, kind, status, attempt_id, error,
+                   created_at, started_at, completed_at
+              FROM job
+             WHERE id = %s
+            """,
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    # psycopg datetime / NULL → JSON.
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "attempt_id": row["attempt_id"],
+        "error": row["error"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+        "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+    }
+
+
+def _set_job_status(
+    job_id: int,
+    status: str,
+    *,
+    attempt_id: int | None = None,
+    error: str | None = None,
+) -> None:
+    from strava_climbing.db import connect
+
+    if status == "running":
+        sql = "UPDATE job SET status = 'running', started_at = now() WHERE id = %s"
+        params: tuple[Any, ...] = (job_id,)
+    elif status == "ready":
+        sql = (
+            "UPDATE job SET status = 'ready', attempt_id = %s, completed_at = now() "
+            "WHERE id = %s"
+        )
+        params = (attempt_id, job_id)
+    elif status == "failed":
+        sql = (
+            "UPDATE job SET status = 'failed', error = %s, completed_at = now() "
+            "WHERE id = %s"
+        )
+        params = (error, job_id)
+    else:
+        raise ValueError(f"unknown status {status}")
+    with connect() as conn:
+        conn.execute(sql, params)
+
+
+def _run_process_upload_job(job_id: int, payload: dict[str, Any]) -> None:
+    """Worker body — runs in the BackgroundTasks thread after the response is
+    sent. Wraps every exception so a single bad upload can't kill the api."""
+    _set_job_status(job_id, "running")
+    try:
+        attempt_id = _do_process_upload(payload)
+    except Exception as exc:  # noqa: BLE001
+        msg = f"{type(exc).__name__}: {exc}"
+        print(f"job {job_id} failed: {msg}", file=sys.stderr)
+        _set_job_status(job_id, "failed", error=msg)
+        return
+    _set_job_status(job_id, "ready", attempt_id=attempt_id)
+
+
+def _do_process_upload(payload: dict[str, Any]) -> int | None:
     from strava_climbing import orchestrate
     from strava_climbing.db import connect
 
+    raw_path = Path(payload["raw_path"])
+    user_id = payload.get("user_id")
+
     attempt_id = orchestrate.process_uploaded_file(
         raw_path,
-        climber_name=climber.strip(),
-        color=(color or None),
-        gym=gym.strip(),
-        title=(title.strip() if title else None),
+        climber_name=payload.get("climber") or "",
+        color=payload.get("color") or None,
+        gym=payload.get("gym") or "",
+        title=payload.get("title"),
     )
 
     if attempt_id is not None and isinstance(user_id, int):
@@ -148,7 +299,7 @@ async def process_upload(
         except Exception as exc:  # noqa: BLE001
             print(f"warn: media publish failed: {exc}", file=sys.stderr)
 
-    return JSONResponse({"attempt_id": attempt_id})
+    return attempt_id
 
 
 # ---------------------------------------------------------------------------

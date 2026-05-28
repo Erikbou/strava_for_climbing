@@ -67,7 +67,7 @@ export function UploadForm({ defaultClimber = "" }: UploadFormProps) {
     fd.set("gym", gym.trim());
     if (chosenTitle) fd.set("title", chosenTitle);
 
-    setInfo("Normalizing video, running pose detection, deriving stats, rendering overlay and highlight…");
+    setInfo("Uploading clip…");
 
     startSubmit(async () => {
       try {
@@ -76,20 +76,61 @@ export function UploadForm({ defaultClimber = "" }: UploadFormProps) {
           const data = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(data.error ?? `upload failed (${res.status})`);
         }
-        const data = (await res.json()) as { attemptId: number | null };
-        if (data.attemptId == null) {
+        const data = (await res.json()) as { jobId: number | null };
+        if (!data.jobId) throw new Error("api returned no job id");
+
+        setInfo("Queued — pose detection, smoothness, highlight cut. Stay on this page.");
+        const attemptId = await pollJob(data.jobId, (status) => {
+          if (status === "running") {
+            setInfo("Running pose pipeline — usually 30–90 s.");
+          }
+        });
+        if (attemptId == null) {
           setError(
             "Processing finished but no climber track was found. Try a 30–90 s clip of a single attempt where the climber stays mostly in frame.",
           );
           setInfo(null);
           return;
         }
-        router.push(`/post/${data.attemptId}`);
+        router.push(`/post/${attemptId}`);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setInfo(null);
       }
     });
+  }
+
+  async function pollJob(
+    jobId: number,
+    onStatus: (status: string) => void,
+  ): Promise<number | null> {
+    // 5-minute upper bound. Pipeline rarely takes more than 2 min on cpu.
+    const start = Date.now();
+    const deadlineMs = 5 * 60 * 1000;
+    let lastStatus = "";
+    while (Date.now() - start < deadlineMs) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+      if (!res.ok) {
+        if (res.status === 404) throw new Error("job disappeared");
+        // Transient — keep polling.
+        continue;
+      }
+      const data = (await res.json()) as {
+        status: string;
+        attempt_id: number | null;
+        error: string | null;
+      };
+      if (data.status !== lastStatus) {
+        lastStatus = data.status;
+        onStatus(data.status);
+      }
+      if (data.status === "ready") return data.attempt_id;
+      if (data.status === "failed") {
+        throw new Error(data.error ?? "pipeline failed");
+      }
+    }
+    throw new Error("timed out waiting for pipeline (5 min)");
   }
 
   return (

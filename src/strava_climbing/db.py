@@ -137,6 +137,24 @@ CREATE TABLE IF NOT EXISTS kudos (
 );
 CREATE INDEX IF NOT EXISTS idx_kudos_user ON kudos(user_id);
 
+-- Async pipeline jobs. The api enqueues a row when an upload is received
+-- and a background task moves the job through queued -> running -> ready
+-- / failed. Browsers poll /jobs/:id for the current state.
+CREATE TABLE IF NOT EXISTS job (
+  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  status       TEXT NOT NULL CHECK (status IN ('queued','running','ready','failed')),
+  payload      JSONB NOT NULL,
+  attempt_id   INTEGER REFERENCES attempt(id) ON DELETE SET NULL,
+  user_id      INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+  error        TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at   TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_job_status_created ON job(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_job_user ON job(user_id);
+
 CREATE TABLE IF NOT EXISTS hold (
   id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   wall_id   INTEGER NOT NULL REFERENCES wall(id)  ON DELETE CASCADE,

@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
       body: forwarded,
     });
     const data = (await res.json().catch(() => ({}))) as {
-      attempt_id?: number | null;
+      job_id?: number;
+      status?: string;
       detail?: string;
     };
     if (!res.ok) {
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
         { status: res.status >= 500 ? 500 : 400 },
       );
     }
-    return NextResponse.json({ attemptId: data.attempt_id ?? null });
+    return NextResponse.json({ jobId: data.job_id ?? null, status: data.status ?? "queued" });
   } catch (err) {
     console.error("upload forward failed", err);
     return NextResponse.json(
