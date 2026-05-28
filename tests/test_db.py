@@ -35,20 +35,18 @@ _TABLES = ("attempt", "hold", "route", "wall", "video", "climber")
 
 @pytest.fixture
 def conn():
-    """Open a connection, apply schema, truncate before AND after each test.
-
-    Post-test truncation matters because the test DB is currently shared with
-    the dev Postgres — leaving rows behind would clobber the running app.
+    """Open a connection, apply schema in autocommit, then run the test inside
+    a transaction that gets rolled back. Keeps the shared dev DB untouched —
+    no truncate, no committed rows leak out of the test.
     """
-    c = connect()
-    c.execute(SCHEMA_SQL)
-    truncate = f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"
-    c.execute(truncate)
+    c = connect()  # autocommit=True by default
+    c.execute(SCHEMA_SQL)  # DDL persists; idempotent CREATE IF NOT EXISTS / ALTER
+    c.autocommit = False
     try:
         yield c
     finally:
         try:
-            c.execute(truncate)
+            c.rollback()
         finally:
             c.close()
 

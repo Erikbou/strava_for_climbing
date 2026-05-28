@@ -21,9 +21,9 @@ _RIGHT_HIP = 12
 
 # Burst threshold expressed as a *fraction of frame height per second* so the
 # detector scales with video resolution and doesn't need re-tuning per clip.
-# Portrait-clip baseline: a single climbing pull covers ~10-20% of the frame
-# height; 0.10 catches solid pulls without flagging breathing/sway.
-_DYNAMIC_VEL_FRAC_HEIGHT_PER_S = 0.10
+# Portrait-clip baseline: 0.04 (~29 px/s on a 720-tall clip) flags the moves
+# climbers actually feel as dynamic without picking up sway/breathing jitter.
+_DYNAMIC_VEL_FRAC_HEIGHT_PER_S = 0.04
 _DYNAMIC_MIN_RUN_FRAMES = 3
 _DYNAMIC_GAP_FRAMES = 6
 
