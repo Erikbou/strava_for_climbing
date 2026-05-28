@@ -51,13 +51,25 @@ class OverlayHUD:
 
 
 def have_nvenc() -> bool:
-    """Detect NVENC support for 3-5× faster overlay encoding (Addendum §E)."""
+    """Detect a usable NVENC encoder (requires an actual NVIDIA GPU at runtime).
+
+    ffmpeg may advertise `h264_nvenc` because it was compiled with NVENC
+    support, but encoding still fails on hosts without an NVIDIA card. Probe
+    by attempting a 1-frame encode from a synthetic input.
+    """
     if not shutil.which("ffmpeg"):
         return False
     try:
-        out = subprocess.check_output(["ffmpeg", "-hide_banner", "-encoders"], text=True)
-        return "h264_nvenc" in out
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=size=32x32:duration=0.1:rate=1",
+                "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-",
+            ],
+            check=True, capture_output=True, timeout=5,
+        )
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
 
 
@@ -119,7 +131,11 @@ def render_overlay(
 
 
 def _transcode(src: Path, dst: Path) -> None:
-    """ffmpeg-transcode the cv2 output to H.264 + faststart so Streamlit plays it."""
+    """ffmpeg-transcode the cv2 output to H.264 + faststart so Streamlit plays it.
+
+    Tries NVENC first if the encoder is actually usable; falls back to libx264
+    on any failure so we never end up with a 0-byte output on the FS.
+    """
     encoder = "h264_nvenc" if have_nvenc() else "libx264"
     cmd = [
         "ffmpeg", "-y",
@@ -131,7 +147,13 @@ def _transcode(src: Path, dst: Path) -> None:
         "-an",
         str(dst),
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        if encoder == "libx264":
+            raise
+        cmd[cmd.index("h264_nvenc")] = "libx264"
+        subprocess.run(cmd, check=True, capture_output=True)
 
 
 def _draw_skeleton(
