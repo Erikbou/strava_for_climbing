@@ -81,10 +81,22 @@ def render_overlay(
     out_path: Path,
     *,
     min_conf: float = 0.2,
+    smoothing_window: int = 9,
 ) -> None:
     """Render ``[bounds.start_frame, bounds.end_frame]`` of ``video_path``
-    with the climber's skeleton, CoM trail, and a metric HUD."""
+    with the climber's skeleton, CoM trail, and a metric HUD.
+
+    Keypoint trajectories are Savitzky-Golay smoothed across time so the
+    drawn skeleton glides instead of jittering frame-to-frame. The raw
+    ``track`` arrays are NOT mutated — smoothing is overlay-only so the
+    upstream metrics keep their high-frequency signal.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Smooth once, up front, over the whole track. Cheap relative to ffmpeg.
+    xy_smooth = _smooth_xy(track.xy, track.conf, min_conf=min_conf, window=smoothing_window)
+    com_smooth = _smooth_com(track.com_xy, window=smoothing_window)
+
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"overlay: failed to open {video_path}")
@@ -108,12 +120,12 @@ def render_overlay(
             ok, frame = cap.read()
             if not ok:
                 break
-            if f_idx >= track.xy.shape[0]:
+            if f_idx >= xy_smooth.shape[0]:
                 writer.write(frame)
                 continue
 
-            _draw_skeleton(frame, track.xy[f_idx], track.conf[f_idx], min_conf)
-            _update_trail(trail, track.com_xy[f_idx])
+            _draw_skeleton(frame, xy_smooth[f_idx], track.conf[f_idx], min_conf)
+            _update_trail(trail, com_smooth[f_idx])
             _draw_trail(frame, trail)
             _draw_hud(
                 frame,
@@ -128,6 +140,57 @@ def render_overlay(
 
     _transcode(tmp_path, out_path)
     tmp_path.unlink(missing_ok=True)
+
+
+def _smooth_xy(
+    xy: np.ndarray,
+    conf: np.ndarray,
+    *,
+    min_conf: float,
+    window: int,
+    polyorder: int = 3,
+) -> np.ndarray:
+    """Per-keypoint, per-axis Savitzky-Golay smoothing across time.
+
+    Low-confidence / NaN frames are linearly interpolated before filtering
+    so a single bad detection doesn't yank the smoothed trajectory.
+    """
+    from scipy.signal import savgol_filter  # type: ignore
+
+    T = xy.shape[0]
+    if window > T or window < polyorder + 2:
+        return xy.copy()
+    out = xy.astype(np.float64, copy=True)
+    idx = np.arange(T)
+    for k in range(xy.shape[1]):
+        usable = (conf[:, k] >= min_conf) & np.isfinite(xy[:, k, 0]) & np.isfinite(xy[:, k, 1])
+        if usable.sum() < window:
+            continue
+        for axis in (0, 1):
+            series = out[:, k, axis]
+            series = np.interp(idx, idx[usable], series[usable])
+            out[:, k, axis] = savgol_filter(series, window_length=window, polyorder=polyorder)
+    return out.astype(xy.dtype)
+
+
+def _smooth_com(com: np.ndarray, *, window: int, polyorder: int = 3) -> np.ndarray:
+    """Smooth the (T, 2) CoM trajectory; preserves NaN gaps as NaN."""
+    from scipy.signal import savgol_filter  # type: ignore
+
+    T = com.shape[0]
+    if window > T or window < polyorder + 2:
+        return com.copy()
+    out = com.astype(np.float64, copy=True)
+    finite = np.isfinite(out[:, 0]) & np.isfinite(out[:, 1])
+    if finite.sum() < window:
+        return com.copy()
+    idx = np.arange(T)
+    for axis in (0, 1):
+        series = np.interp(idx, idx[finite], out[finite, axis])
+        smoothed = savgol_filter(series, window_length=window, polyorder=polyorder)
+        smoothed[~finite] = np.nan
+        out[:, axis] = smoothed
+    return out.astype(com.dtype)
 
 
 def _transcode(src: Path, dst: Path) -> None:

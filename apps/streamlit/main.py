@@ -3,7 +3,8 @@
 View selection lives in `st.query_params["view"]` so links are refresh-safe
 and shareable. Visual language matches the landing page at
 https://artemis.spcf.app/ (lowercase wordmark, amber-orange gradient,
-SF Pro Rounded, pill-shaped CTAs).
+SF Pro Rounded, pill-shaped CTAs). Layout patterns borrowed from Strava
+(see docs/plans/2026-05-28-artemis-ui-strava-layout.md).
 """
 
 from __future__ import annotations
@@ -29,11 +30,26 @@ st.markdown(
         --ink: #111;
         --ink-soft: #1a1a1a;
         --muted: #6B6B6F;
+        --muted-2: #8E8E93;
         --placeholder: #b5b5b5;
         --field-border: #d5d5d5;
         --hairline: #ECECEC;
         --bg: #FFFFFF;
         --bg-soft: #FAFAFA;
+
+        /* Spacing scale (8px base) */
+        --s-1: 4px;
+        --s-2: 8px;
+        --s-3: 12px;
+        --s-4: 16px;
+        --s-5: 20px;
+        --s-6: 24px;
+        --s-7: 32px;
+        --s-8: 40px;
+
+        /* Card paddings — collapse on small screens */
+        --card-pad-x: clamp(14px, 4vw, 20px);
+        --card-pad-y: clamp(12px, 3vw, 16px);
       }
 
       /* ---------- Reset Streamlit chrome ---------- */
@@ -41,7 +57,10 @@ st.markdown(
       footer, #MainMenu { display: none !important; }
       [data-testid="stSidebar"] { display: none !important; }
       .block-container {
-        padding-top: 1rem; padding-bottom: 5rem;
+        padding-top: var(--s-3);
+        padding-bottom: var(--s-8);
+        padding-left: clamp(12px, 4vw, 24px);
+        padding-right: clamp(12px, 4vw, 24px);
         max-width: 720px;
       }
       html, body, [class*="stApp"] {
@@ -55,46 +74,73 @@ st.markdown(
       }
       h1, h2, h3, h4, p, span, div { letter-spacing: -0.005em; }
 
-      /* ---------- Activity cards ---------- */
-      .activity-card {
-        background: var(--bg);
-        border: 1px solid var(--hairline);
-        border-radius: 16px;
-        padding: 0;
-        margin-bottom: 18px;
+      /* ---------- Streamlit containers become activity cards ---------- */
+      [data-testid="stVerticalBlockBorderWrapper"] {
+        background: var(--bg) !important;
+        border: 1px solid var(--hairline) !important;
+        border-radius: 18px !important;
+        margin-bottom: var(--s-4) !important;
+        padding: 0 !important;
+        box-shadow: 0 1px 2px rgba(17,17,17,0.03);
         overflow: hidden;
-        box-shadow: 0 1px 2px rgba(17, 17, 17, 0.03);
       }
-      .activity-head { display: flex; align-items: center; padding: 16px 18px 12px 18px; }
-      .activity-head .meta { flex: 1; min-width: 0; }
-      .activity-head .name {
+      [data-testid="stVerticalBlockBorderWrapper"] > div > div {
+        padding: 0 !important;
+        gap: 0 !important;
+      }
+
+      /* Section markup that sits inside a card */
+      .card-head {
+        display: flex; align-items: center;
+        padding: var(--card-pad-y) var(--card-pad-x) var(--s-3);
+      }
+      .card-head .meta { flex: 1; min-width: 0; }
+      .card-head .name {
         font-weight: 800; font-size: 15px; color: var(--ink);
         letter-spacing: -0.01em;
       }
-      .activity-head .time { font-size: 12px; color: var(--muted); font-weight: 600; }
-      .activity-title {
-        padding: 0 18px 12px 18px;
-        font-size: 19px; font-weight: 800; color: var(--ink);
-        line-height: 1.25; letter-spacing: -0.015em;
+      .card-head .sub { font-size: 12px; color: var(--muted); font-weight: 600; }
+
+      .card-title {
+        padding: 0 var(--card-pad-x) var(--s-2);
+        font-size: clamp(17px, 4.2vw, 19px); font-weight: 800;
+        color: var(--ink); line-height: 1.25; letter-spacing: -0.015em;
+      }
+      .card-chips {
+        padding: 0 var(--card-pad-x) var(--s-3);
+        display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center;
+      }
+
+      /* Streamlit-rendered video sits flush inside the card */
+      [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVideo"] video,
+      [data-testid="stVerticalBlockBorderWrapper"] video {
+        border-radius: 0 !important;
+        display: block;
+        width: 100%;
+        background: #000;
+      }
+      [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVideo"] {
+        margin: 0 !important;
       }
 
       /* ---------- Avatar ---------- */
       .avatar {
-        width: 42px; height: 42px; border-radius: 50%;
+        width: 40px; height: 40px; border-radius: 50%;
         background: linear-gradient(180deg, var(--orange-1) 0%, var(--orange-2) 60%, var(--orange-3) 100%);
         color: white;
         display: flex; align-items: center; justify-content: center;
         font-weight: 800; font-size: 14px; letter-spacing: 0.3px;
-        margin-right: 12px; flex-shrink: 0;
+        margin-right: var(--s-3); flex-shrink: 0;
         box-shadow: 0 2px 6px var(--orange-shadow);
       }
-      .avatar.lg { width: 68px; height: 68px; font-size: 22px; }
+      .avatar.lg { width: 64px; height: 64px; font-size: 22px; }
 
       /* ---------- Badges ---------- */
       .badge {
         display: inline-block; padding: 4px 12px; border-radius: 999px;
         font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
         text-transform: lowercase;
+        line-height: 1.4;
       }
       .badge-send {
         color: white;
@@ -126,22 +172,34 @@ st.markdown(
         grid-template-columns: repeat(4, 1fr);
         gap: 0;
         border-top: 1px solid var(--hairline);
-        background: #FAFAFA;
+        background: var(--bg-soft);
       }
       .stat-row .tile {
-        padding: 14px 12px; text-align: left;
+        padding: var(--s-3) var(--s-3); text-align: left;
         border-right: 1px solid var(--hairline);
       }
       .stat-row .tile:last-child { border-right: none; }
       .stat-row .tile .value {
-        font-size: 22px; font-weight: 800; color: var(--ink);
-        line-height: 1.1; letter-spacing: -0.02em;
+        font-size: clamp(20px, 5vw, 24px); font-weight: 800; color: var(--ink);
+        line-height: 1.05; letter-spacing: -0.025em;
       }
       .stat-row .tile .label {
         font-size: 10px; color: var(--muted); text-transform: lowercase;
-        letter-spacing: 0.6px; margin-top: 4px; font-weight: 700;
+        letter-spacing: 0.6px; margin-top: 4px; font-weight: 800;
       }
 
+      /* Collapse 1x4 -> 2x2 on small screens */
+      @media (max-width: 480px) {
+        .stat-row { grid-template-columns: repeat(2, 1fr); }
+        .stat-row .tile {
+          border-right: 1px solid var(--hairline);
+          border-bottom: 1px solid var(--hairline);
+        }
+        .stat-row .tile:nth-child(2n) { border-right: none; }
+        .stat-row .tile:nth-last-child(-n+2) { border-bottom: none; }
+      }
+
+      /* 2x3 grid on the post detail */
       .stat-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -150,30 +208,40 @@ st.markdown(
         border: 1px solid var(--hairline);
         border-radius: 16px;
         overflow: hidden;
-        margin: 12px 0 24px 0;
+        margin: var(--s-3) 0 var(--s-6);
       }
       .stat-grid .tile { background: var(--bg); padding: 18px; }
       .stat-grid .tile .value {
-        font-size: 28px; font-weight: 800; color: var(--ink);
+        font-size: clamp(22px, 6vw, 28px); font-weight: 800; color: var(--ink);
         line-height: 1.05; letter-spacing: -0.025em;
       }
       .stat-grid .tile .label {
         font-size: 10px; color: var(--muted); text-transform: lowercase;
-        letter-spacing: 0.6px; margin-top: 6px; font-weight: 700;
+        letter-spacing: 0.6px; margin-top: 6px; font-weight: 800;
+      }
+      @media (max-width: 480px) {
+        .stat-grid { grid-template-columns: repeat(2, 1fr); }
       }
 
-      /* ---------- Section headings ---------- */
+      /* ---------- Hairline section header ---------- */
       .section-h {
+        display: flex; align-items: center; gap: var(--s-3);
         font-size: 11px; color: var(--muted); text-transform: lowercase;
         letter-spacing: 0.8px; font-weight: 800;
-        margin: 28px 0 10px 0;
+        margin: var(--s-7) 0 var(--s-3);
       }
+      .section-h::after {
+        content: ""; flex: 1; height: 1px; background: var(--hairline);
+      }
+
+      /* ---------- CTA / action row beneath the card ---------- */
+      .card-cta-pad { padding: var(--s-3) var(--card-pad-x); }
 
       /* ---------- Buttons (Streamlit) ---------- */
       .stButton > button {
         border-radius: 999px !important;
         font-weight: 700 !important;
-        padding: 6px 14px !important;
+        padding: 8px 18px !important;
         font-size: 13px !important;
         letter-spacing: -0.005em !important;
         border: 1.5px solid var(--field-border) !important;
@@ -181,6 +249,7 @@ st.markdown(
         color: var(--ink) !important;
         transition: filter 120ms ease, transform 80ms ease !important;
         white-space: nowrap !important;
+        min-height: 40px !important;
       }
       .stButton > button:hover {
         filter: brightness(0.97);
@@ -191,6 +260,7 @@ st.markdown(
         background: linear-gradient(180deg,
           var(--orange-1) 0%, var(--orange-2) 45%, var(--orange-3) 100%) !important;
         border: none !important;
+        min-height: 44px !important;
         box-shadow:
           inset 0 1px 0 rgba(255,255,255,0.55),
           inset 0 -2px 0 rgba(160,70,0,0.18),
@@ -200,10 +270,13 @@ st.markdown(
       }
       .stButton > button[kind="primary"]:hover {
         filter: brightness(1.04);
-        transform: none;
       }
       .stButton > button[kind="primary"]:active {
         transform: translateY(1px);
+      }
+      .stButton > button:focus-visible {
+        outline: 3px solid rgba(244, 122, 0, 0.4) !important;
+        outline-offset: 3px !important;
       }
 
       /* ---------- Inputs ---------- */
@@ -212,23 +285,48 @@ st.markdown(
         border-radius: 14px !important;
         border-color: var(--field-border) !important;
       }
-      .stTextInput input { font-weight: 600 !important; color: var(--ink) !important; }
-
-      /* ---------- Video player ---------- */
-      video { border-radius: 12px; background: #000; }
+      .stTextInput input {
+        font-weight: 600 !important;
+        color: var(--ink) !important;
+      }
+      .stTextInput input:focus,
+      .stSelectbox > div > div:focus-within {
+        border-color: var(--orange-3) !important;
+        box-shadow: 0 0 0 3px rgba(244, 122, 0, 0.18) !important;
+      }
 
       /* ---------- Profile header ---------- */
       .profile-head {
-        display: flex; align-items: center; gap: 18px;
-        padding: 14px 0 22px 0;
+        display: flex; align-items: center; gap: var(--s-4);
+        padding: var(--s-3) 0 var(--s-5);
         border-bottom: 1px solid var(--hairline);
-        margin-bottom: 22px;
+        margin-bottom: var(--s-5);
       }
       .profile-head .name {
-        font-size: 26px; font-weight: 800; color: var(--ink);
-        letter-spacing: -0.025em;
+        font-size: clamp(22px, 6vw, 28px); font-weight: 800; color: var(--ink);
+        letter-spacing: -0.025em; line-height: 1.1;
       }
       .profile-head .sub { font-size: 13px; color: var(--muted); font-weight: 600; }
+
+      /* ---------- Brand bar ---------- */
+      .brand-row {
+        position: sticky; top: 0; z-index: 100;
+        background: rgba(250, 250, 250, 0.85);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        margin: 0 calc(-1 * clamp(12px, 4vw, 24px)) var(--s-5);
+        padding: var(--s-3) clamp(12px, 4vw, 24px);
+        border-bottom: 1px solid var(--hairline);
+      }
+
+      /* ---------- Reduced motion ---------- */
+      @media (prefers-reduced-motion: reduce) {
+        .stButton > button,
+        .stButton > button[kind="primary"]:active {
+          transition: none !important;
+          transform: none !important;
+        }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -241,14 +339,14 @@ def _brand_bar() -> None:
     with cols[0]:
         st.markdown(
             """
-            <div style="padding-top: 12px; padding-bottom: 4px;">
-              <span style="font-weight: 800; font-size: 32px;
+            <div style="padding-top: 8px; padding-bottom: 4px;">
+              <div role="banner" style="font-weight: 800; font-size: 30px;
                            letter-spacing: -0.025em; color: var(--orange-2);
                            line-height: 1;">
                 artemis<sup style="font-size:0.4em;font-weight:700;
                                    vertical-align:super;line-height:0;
                                    color:var(--orange-3);">&trade;</sup>
-              </span>
+              </div>
               <div style="font-size: 10px; color: var(--muted);
                           text-transform: lowercase; letter-spacing: 1.6px;
                           font-weight: 800; margin-top: 4px;">
@@ -280,11 +378,6 @@ def _brand_bar() -> None:
             st.query_params.clear()
             st.query_params["view"] = "upload"
             st.rerun()
-    st.markdown(
-        "<div style='border-bottom:1px solid var(--hairline); "
-        "margin: 10px 0 26px 0;'></div>",
-        unsafe_allow_html=True,
-    )
 
 
 def main() -> None:
