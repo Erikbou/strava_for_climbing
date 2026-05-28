@@ -27,6 +27,38 @@ service "dashboard" {
   }
 }
 
+build "web" {
+  base    = "node"
+  workdir = "apps/web"
+}
+
+service "web" {
+  build   = build.web
+  command = "pnpm start"
+
+  endpoint {
+    public = true
+    health_check {
+      path = "/"
+    }
+  }
+
+  env = {
+    PORT               = port
+    DATABASE_URL       = postgres.main.url
+    ARTEMIS_PYTHON     = "../../.venv/bin/python"
+    ARTEMIS_MEDIA_ROOT = "../../data"
+    S3_ENDPOINT        = storage.media.endpoint
+    S3_ACCESS_KEY      = storage.media.access_key
+    S3_SECRET_KEY      = storage.media.secret_key
+    S3_BUCKET          = storage.media.bucket
+  }
+
+  dev {
+    command = "pnpm dev"
+  }
+}
+
 postgres "main" {}
 
 storage "media" {}

@@ -1,0 +1,115 @@
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve, extname } from "node:path";
+
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 600; // long pipelines (pose + render) can take minutes
+
+function repoRoot(): string {
+  // apps/web → apps → repo root
+  return resolve(process.cwd(), "..", "..");
+}
+
+function pythonBin(): string {
+  return (
+    process.env.ARTEMIS_PYTHON ||
+    resolve(repoRoot(), ".venv/bin/python") ||
+    "python3"
+  );
+}
+
+interface UploadResult {
+  attemptId: number | null;
+}
+
+async function runPipeline(args: {
+  rawPath: string;
+  climber: string;
+  color: string | null;
+  gym: string;
+  title: string | null;
+}): Promise<UploadResult> {
+  // Invoke a tiny Python harness that calls orchestrate.process_uploaded_file
+  // and prints `ATTEMPT_ID=<n|None>` on its last line. The harness lives in
+  // scripts/ so it shares the same package layout as the existing CLI.
+  const py = pythonBin();
+  const harness = resolve(repoRoot(), "scripts/web_upload_harness.py");
+  const payload = JSON.stringify(args);
+
+  return await new Promise<UploadResult>((resolveP, rejectP) => {
+    const child = spawn(py, [harness], {
+      cwd: repoRoot(),
+      env: { ...process.env, PYTHONPATH: resolve(repoRoot(), "src") },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => {
+      stdout += d.toString();
+    });
+    child.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    child.on("error", (err) => rejectP(err));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        rejectP(new Error(`pipeline exited ${code}: ${stderr.slice(-2000)}`));
+        return;
+      }
+      const m = /ATTEMPT_ID=(\S+)/.exec(stdout);
+      if (!m) {
+        rejectP(new Error(`pipeline produced no ATTEMPT_ID. stdout: ${stdout.slice(-2000)}`));
+        return;
+      }
+      const raw = m[1];
+      const id = raw === "None" ? null : Number(raw);
+      resolveP({ attemptId: Number.isFinite(id) ? (id as number) : null });
+    });
+    child.stdin.end(payload);
+  });
+}
+
+export async function POST(req: NextRequest) {
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "bad form data" }, { status: 400 });
+  }
+  const file = form.get("file");
+  const climber = String(form.get("climber") ?? "").trim();
+  const color = String(form.get("color") ?? "").trim() || null;
+  const gym = String(form.get("gym") ?? "").trim();
+  const title = String(form.get("title") ?? "").trim() || null;
+
+  if (!(file instanceof File)) {
+    return NextResponse.json({ error: "missing file" }, { status: 400 });
+  }
+  if (!climber) {
+    return NextResponse.json({ error: "missing climber" }, { status: 400 });
+  }
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const suffix = (extname(file.name) || ".mp4").toLowerCase();
+  const rawDir = resolve(repoRoot(), "data/raw");
+  await mkdir(rawDir, { recursive: true });
+  const rawPath = resolve(rawDir, `${sha.slice(0, 12)}${suffix}`);
+  await writeFile(rawPath, bytes);
+
+  try {
+    const result = await runPipeline({ rawPath, climber, color, gym, title });
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("upload pipeline failed", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "pipeline failed" },
+      { status: 500 },
+    );
+  }
+}
