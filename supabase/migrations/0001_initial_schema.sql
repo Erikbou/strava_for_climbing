@@ -83,8 +83,12 @@ create index if not exists idx_hold_wall_route on hold(wall_id, route_id);
 -- overwrite a human-confirmed pairing. Application-level guard lives in
 -- src/strava_climbing/provenance.py::transition() — this trigger is the
 -- DB-level second line of defense.
+-- ``set search_path`` pins lookup so a malicious schema-shadow can't hijack
+-- the function. Supabase advisor flags an unset search_path as a finding.
 create or replace function protect_manual_route() returns trigger
-language plpgsql as $$
+language plpgsql
+set search_path = public, pg_catalog
+as $$
 begin
   if old.route_source = 'manual' and new.route_source <> 'manual' then
     raise exception 'cannot overwrite manual route assignment';
@@ -99,8 +103,11 @@ create trigger trg_attempt_protect_manual
   for each row execute function protect_manual_route();
 
 -- Convenience view: route list with attempt count, ordered to match the
--- old SQLite `list_routes()` ORDER BY clause.
-create or replace view route_with_attempt_counts as
+-- old SQLite `list_routes()` ORDER BY clause. ``security_invoker=true``
+-- makes it respect the caller's RLS instead of the creator's (Supabase
+-- advisor flags the default ``security_definer`` behavior as a finding).
+create or replace view route_with_attempt_counts
+  with (security_invoker = true) as
   select r.id,
          r.color,
          r.origin,
