@@ -95,29 +95,40 @@ def load_pose_cache(cache_path: Path) -> dict[int, PoseTrack]:
     return out
 
 
-def pick_climber_track(tracks: dict[int, PoseTrack]) -> int | None:
-    """Pick the track with the largest cumulative vertical climb of CoM.
+_MIN_PRESENT_FRAMES = 30  # 1 s @ 30 fps — drops noise tracks before scoring
 
-    Tie-broken by track duration (number of frames present). Returns ``None``
-    when no track has any usable frames.
+
+def pick_climber_track(tracks: dict[int, PoseTrack]) -> int | None:
+    """Pick the track most likely to be the climber.
+
+    Filters out tracks present for less than `_MIN_PRESENT_FRAMES` (typically
+    spurious bystander detections), then picks by maximum vertical CoM span.
+    Ties broken by track duration. Returns ``None`` when no qualifying track
+    exists.
     """
     if not tracks:
         return None
-    best_id = None
-    best = (-np.inf, 0)  # (climb, duration)
+    candidates: list[tuple[float, int, int]] = []  # (climb, duration, tid)
     for tid, t in tracks.items():
         com_y = t.com_xy[:, 1]
         present = ~np.isnan(com_y)
-        if not present.any():
+        duration = int(present.sum())
+        if duration < _MIN_PRESENT_FRAMES:
             continue
         ys = com_y[present]
-        # Climb is max - min in image y. Lower y = higher in frame, so flip sign:
         climb = float(ys.max() - ys.min())
-        duration = int(present.sum())
-        if (climb, duration) > best:
-            best = (climb, duration)
-            best_id = tid
-    return best_id
+        candidates.append((climb, duration, tid))
+    if not candidates:
+        # No track met the minimum-presence bar; fall back to whichever has the most
+        # frames so downstream code still has something to work with.
+        best_tid = max(
+            tracks,
+            key=lambda i: int((~np.isnan(tracks[i].com_xy[:, 1])).sum()),
+            default=None,
+        )
+        return best_tid
+    candidates.sort(reverse=True)
+    return candidates[0][2]
 
 
 def estimate_com(xy: np.ndarray, conf: np.ndarray, *, min_conf: float = 0.2) -> np.ndarray:

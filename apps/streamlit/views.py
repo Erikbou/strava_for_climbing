@@ -174,12 +174,24 @@ def upload_view() -> None:
     if not climber_name.strip():
         st.error("Climber name is required.")
         return
+    size_mb = uploaded.size / (1024 * 1024)
+    if size_mb > 25:
+        st.warning(
+            f"Your file is {size_mb:.0f} MB — large clips are usually >2 min "
+            "and the tracker fragments. v1 works best on **30-90 second** clips "
+            "of one attempt. Continuing anyway."
+        )
 
     attempt_id = _run_upload_pipeline(uploaded, climber_name.strip(), color, gym.strip())
     if attempt_id is None:
         st.warning(
-            "Processing finished but no climber track was found in the video. "
-            "Try a clip where the climber is clearly on the wall."
+            "Processing finished but no climber track was found. Common causes:\n\n"
+            "- **Clip too long** (>90 s): the tracker fragments across many short "
+            "tracks; none has enough continuous presence to register as an attempt.\n"
+            "- **Climber goes in and out of frame** between camera moves.\n"
+            "- **Multiple people in the foreground** confuse the tracker.\n\n"
+            "Try a 30-90 s clip of a single attempt where the climber stays mostly "
+            "in frame."
         )
         return
 
