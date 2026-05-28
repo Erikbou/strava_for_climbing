@@ -31,7 +31,7 @@ def extract_clip(video: Path, out_npz: Path, model: Path, *, max_dim: int = 1280
 def main() -> None:
     repo = Path(__file__).resolve().parents[1]
     p = argparse.ArgumentParser(description="Batch-extract MediaPipe keypoints per clip")
-    p.add_argument("--in-dir", default=str(repo / "clips" / "raw"))
+    p.add_argument("--in-dir", default=str(repo / "data" / "raw"))
     p.add_argument("--out-dir", default=str(repo / "clips" / "keypoints"))
     p.add_argument("--model", default=str(repo / "models" / "pose_landmarker_heavy.task"))
     p.add_argument("--force", action="store_true", help="re-extract even if npz exists")
