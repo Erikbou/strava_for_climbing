@@ -37,7 +37,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 
 def _media_roots() -> list[Path]:
@@ -142,7 +142,67 @@ async def process_upload(
         except Exception as exc:  # noqa: BLE001
             print(f"warn: link user failed: {exc}", file=sys.stderr)
 
+    if attempt_id is not None:
+        try:
+            _publish_attempt_media(attempt_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"warn: media publish failed: {exc}", file=sys.stderr)
+
     return JSONResponse({"attempt_id": attempt_id})
+
+
+# ---------------------------------------------------------------------------
+# Storage publishing — mirror highlight/overlay to storage.media + rewrite
+# the DB path so subsequent reads come from object storage.
+# ---------------------------------------------------------------------------
+
+def _publish_attempt_media(attempt_id: int) -> None:
+    from strava_climbing import storage_client
+    from strava_climbing.db import connect
+
+    if not storage_client.is_enabled():
+        return
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT highlight_path, overlay_path FROM attempt WHERE id = %s",
+            (attempt_id,),
+        ).fetchone()
+    if not row:
+        return
+
+    updates: dict[str, str] = {}
+    for column in ("highlight_path", "overlay_path"):
+        value = row[column]
+        if not value or _is_object_uri(value):
+            continue
+        local = Path(value)
+        if not local.exists() or not local.is_file():
+            continue
+        kind = "highlights" if column == "highlight_path" else "overlays"
+        key = f"{kind}/{local.name}"
+        try:
+            uri = storage_client.upload_file(local, key, content_type="video/mp4")
+        except Exception as exc:  # noqa: BLE001
+            print(f"warn: upload {column} failed: {exc}", file=sys.stderr)
+            continue
+        updates[column] = uri
+        # Best-effort local cleanup; the api container's disk is ephemeral.
+        try:
+            local.unlink()
+        except OSError:
+            pass
+
+    if not updates:
+        return
+    set_clause = ", ".join(f"{col} = %s" for col in updates)
+    params = (*updates.values(), attempt_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE attempt SET {set_clause} WHERE id = %s", params)
+
+
+def _is_object_uri(value: str) -> bool:
+    return value.startswith("s3://") or value.startswith("https://")
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +251,17 @@ def media(
     request: Request,
     path: str = Query(...),
 ) -> Response:
+    # If the caller hands us an object-store URI, 302 to a short-lived
+    # presigned URL — the browser streams from object storage directly.
+    if path.startswith("s3://"):
+        from strava_climbing import storage_client
+
+        if not storage_client.is_enabled():
+            raise HTTPException(status_code=500, detail="storage not configured")
+        _bucket, key = storage_client.parse_s3_uri(path)
+        url = storage_client.presigned_url(key)
+        return RedirectResponse(url, status_code=307)
+
     resolved = _safe_resolve(path)
     if resolved is None:
         raise HTTPException(status_code=404, detail="not found")
