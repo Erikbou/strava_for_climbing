@@ -9,11 +9,28 @@ SF Pro Rounded, pill-shaped CTAs). Layout patterns borrowed from Strava
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 import views  # streamlit puts the script dir on sys.path
 
+_IMG_DIR = Path(__file__).resolve().parents[2] / "src" / "strava_climbing" / "img"
+_LOGO_ICON = _IMG_DIR / "logo.png"
+_LOGOTYPE = _IMG_DIR / "artemis-logotype.png"
+
+
+def _data_uri(path: Path) -> str:
+    """Read a PNG and return a `data:image/png;base64,...` URI for inline `<img src>`."""
+    return f"data:image/png;base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+
+
+_LOGOTYPE_URI = _data_uri(_LOGOTYPE) if _LOGOTYPE.exists() else ""
+
+
 st.set_page_config(
     page_title="artemis — sports technology",
+    page_icon=str(_LOGO_ICON) if _LOGO_ICON.exists() else None,
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -390,25 +407,40 @@ def _brand_bar() -> None:
     view = st.query_params.get("view", "feed")
     cols = st.columns([3, 1, 1])
     with cols[0]:
-        st.markdown(
-            """
-            <div style="padding-top: 8px; padding-bottom: 4px;">
-              <div role="banner" style="font-weight: 800; font-size: 30px;
-                           letter-spacing: -0.025em; color: var(--orange-2);
-                           line-height: 1;">
-                artemis<sup style="font-size:0.4em;font-weight:700;
-                                   vertical-align:super;line-height:0;
-                                   color:var(--orange-3);">&trade;</sup>
-              </div>
-              <div style="font-size: 10px; color: var(--muted);
-                          text-transform: lowercase; letter-spacing: 1.6px;
-                          font-weight: 800; margin-top: 4px;">
-                sports technology
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        if _LOGOTYPE_URI:
+            st.markdown(
+                f"""
+                <div role="banner" style="padding-top: 6px; padding-bottom: 2px;">
+                  <img src="{_LOGOTYPE_URI}" alt="artemis"
+                       style="height: clamp(34px, 9vw, 44px); width: auto;
+                              display: block; margin-bottom: 4px;" />
+                  <div style="font-size: 10px; color: var(--muted);
+                              text-transform: lowercase; letter-spacing: 1.6px;
+                              font-weight: 800;">
+                    sports technology
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div role="banner" style="padding-top: 8px; padding-bottom: 4px;">
+                  <div style="font-weight: 800; font-size: 30px;
+                              letter-spacing: -0.025em; color: var(--orange-2);
+                              line-height: 1;">
+                    artemis
+                  </div>
+                  <div style="font-size: 10px; color: var(--muted);
+                              text-transform: lowercase; letter-spacing: 1.6px;
+                              font-weight: 800; margin-top: 4px;">
+                    sports technology
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
     with cols[1]:
         st.write("")
         if view == "feed":
