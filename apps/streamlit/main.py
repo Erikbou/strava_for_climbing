@@ -56,6 +56,10 @@ def main() -> None:
         views.profile_view(climber_id)
         return
 
+    if view == "upload":
+        views.upload_view()
+        return
+
     views.feed_view()
 
 

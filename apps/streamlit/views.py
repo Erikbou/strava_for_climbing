@@ -7,6 +7,7 @@ read-only mode are honoured uniformly.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,9 @@ from typing import Any
 import queries
 import streamlit as st
 
+from strava_climbing import orchestrate
 from strava_climbing.config import gym as G
+from strava_climbing.config import paths as P
 
 STRAVA_ORANGE = "#FC4C02"
 
@@ -92,22 +95,119 @@ def _send_badge(send: bool) -> str:
 
 
 def feed_view() -> None:
-    st.markdown(
-        f"<h1 style='color:{STRAVA_ORANGE};margin-bottom:0'>Strava for Climbing</h1>"
-        "<p style='color:#666;margin-top:4px'>Feed · recent climbs by everyone</p>",
-        unsafe_allow_html=True,
-    )
+    header = st.columns([4, 1])
+    with header[0]:
+        st.markdown(
+            f"<h1 style='color:{STRAVA_ORANGE};margin-bottom:0'>Strava for Climbing</h1>"
+            "<p style='color:#666;margin-top:4px'>Feed · recent climbs by everyone</p>",
+            unsafe_allow_html=True,
+        )
+    with header[1]:
+        st.write("")
+        if st.button("Upload climb", type="primary", use_container_width=True):
+            go("upload")
 
     rows = queries.feed()
     if not rows:
         st.info(
-            "No climbs yet. Run `uv run strava process` after dropping videos in `data/raw/`, "
-            "or run `python scripts/seed_demo.py` to populate demo data."
+            "No climbs yet. Tap **Upload climb** above to add the first one — the "
+            "pipeline runs pose detection on your video, picks attempt boundaries, "
+            "computes body stats, and renders a highlight clip."
         )
         return
 
     for r in rows:
         _feed_card(r)
+
+
+def upload_view() -> None:
+    back_button()
+    st.markdown(
+        f"<h2 style='color:{STRAVA_ORANGE};margin-bottom:0'>Upload a climb</h2>"
+        "<p style='color:#666;margin-top:4px'>"
+        "Drop in a short bouldering clip. We'll detect pose, time the send, "
+        "score smoothness, and cut a highlight."
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form("upload-form", clear_on_submit=False):
+        uploaded = st.file_uploader(
+            "Climbing video",
+            type=["mp4", "mov", "m4v", "mkv", "webm"],
+            accept_multiple_files=False,
+            help="Mobile-shot clips up to ~60s work best.",
+        )
+        cols = st.columns(2)
+        with cols[0]:
+            climber_name = st.text_input(
+                "Climber name", placeholder="e.g. Niklavs Visockis"
+            )
+            color_choices = list(G.COLOR_GRADES[G.DEFAULT_GYM].keys())
+            color = st.selectbox(
+                "Hold color (drives the grade)",
+                options=color_choices,
+                index=0,
+            )
+        with cols[1]:
+            gym = st.text_input("Gym", value=G.DEFAULT_GYM)
+            grade_preview = G.lookup(color, gym=gym)
+            if grade_preview:
+                st.metric(
+                    "Inferred grade",
+                    grade_preview["grade"],
+                    delta=grade_preview["label"],
+                    delta_color="off",
+                )
+            else:
+                st.caption("Grade lookup only configured for Klättercentret Akalla in v1.")
+
+        submitted = st.form_submit_button(
+            "Analyze climb", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+    if uploaded is None:
+        st.error("Pick a video file first.")
+        return
+    if not climber_name.strip():
+        st.error("Climber name is required.")
+        return
+
+    attempt_id = _run_upload_pipeline(uploaded, climber_name.strip(), color, gym.strip())
+    if attempt_id is None:
+        st.warning(
+            "Processing finished but no climber track was found in the video. "
+            "Try a clip where the climber is clearly on the wall."
+        )
+        return
+
+    queries.feed.clear()
+    queries.attempt.clear()
+    queries.climber.clear()
+    queries.climber_attempts.clear()
+    go("post", attempt_id=attempt_id)
+
+
+def _run_upload_pipeline(uploaded: Any, climber_name: str, color: str, gym: str) -> int | None:
+    P.ensure_dirs()
+    raw_bytes = uploaded.getbuffer()
+    sha = hashlib.sha256(raw_bytes).hexdigest()
+    suffix = Path(uploaded.name).suffix.lower() or ".mp4"
+    raw_path = P.RAW_DIR / f"{sha[:12]}{suffix}"
+    raw_path.write_bytes(raw_bytes)
+
+    with st.spinner(
+        "Normalizing video → running YOLO11l pose → boundary detection → "
+        "stats → overlay + highlight render. First run downloads model weights."
+    ):
+        return orchestrate.process_uploaded_file(
+            raw_path,
+            climber_name=climber_name,
+            color=color,
+            gym=gym,
+        )
 
 
 def _feed_card(r: dict[str, Any]) -> None:
