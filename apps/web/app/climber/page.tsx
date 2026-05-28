@@ -2,15 +2,16 @@ import Link from "next/link";
 
 import { Avatar } from "@/components/Avatar";
 import { BrandBar } from "@/components/BrandBar";
+import { currentUser } from "@/lib/auth";
 import { climbers } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClimberPickerPage() {
-  const list = await climbers();
+  const [user, list] = await Promise.all([currentUser(), climbers()]);
   return (
     <div className="app-shell">
-      <BrandBar active="climber" />
+      <BrandBar active="climber" user={user} />
       <h1 className="page-h1">climbers</h1>
       <div className="page-sub">
         pick a climber to see their profile, grade pyramid, and recent sends.

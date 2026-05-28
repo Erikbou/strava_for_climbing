@@ -88,7 +88,54 @@ ALTER TABLE attempt ADD COLUMN IF NOT EXISTS longest_reach_px  DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS hang_time_seconds DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS idle_seconds      DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS posted_at         TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS title             TEXT;
 CREATE INDEX IF NOT EXISTS idx_attempt_posted_at ON attempt(posted_at DESC);
+
+-- Auth: users + sessions + reset tokens. The legacy anonymous-kudo cookie is
+-- gone; kudos now require a user.
+CREATE TABLE IF NOT EXISTS "user" (
+  id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email             TEXT NOT NULL,
+  email_verified_at TIMESTAMPTZ,
+  password_hash     TEXT NOT NULL,
+  display_name      TEXT NOT NULL,
+  avatar_url        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_email_ci ON "user" (LOWER(email));
+
+CREATE TABLE IF NOT EXISTS session (
+  id          TEXT PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_agent  TEXT,
+  ip          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_user_id ON session(user_id);
+CREATE INDEX IF NOT EXISTS idx_session_expires ON session(expires_at);
+
+CREATE TABLE IF NOT EXISTS password_reset_token (
+  token      TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ
+);
+
+ALTER TABLE climber ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_climber_user ON climber(user_id);
+CREATE INDEX IF NOT EXISTS idx_attempt_user ON attempt(user_id);
+
+CREATE TABLE IF NOT EXISTS kudos (
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  attempt_id INTEGER NOT NULL REFERENCES attempt(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(attempt_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kudos_user ON kudos(user_id);
 
 CREATE TABLE IF NOT EXISTS hold (
   id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

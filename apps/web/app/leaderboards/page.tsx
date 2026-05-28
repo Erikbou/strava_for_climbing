@@ -4,6 +4,7 @@ import { Avatar } from "@/components/Avatar";
 import { BrandBar } from "@/components/BrandBar";
 import { ColorChip } from "@/components/ColorChip";
 import { SectionHead } from "@/components/SectionHead";
+import { currentUser } from "@/lib/auth";
 import { lookupGrade } from "@/lib/gym";
 import { feed, type FeedRow } from "@/lib/queries";
 
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 const MEDALS = ["", "🥇", "🥈", "🥉"];
 
 export default async function LeaderboardsPage() {
-  const rows = await feed();
+  const [user, rows] = await Promise.all([currentUser(), feed()]);
   const sends = rows
     .filter((r) => r.send && r.time_seconds != null)
     .sort((a, b) => (a.time_seconds ?? 0) - (b.time_seconds ?? 0));
@@ -20,7 +21,7 @@ export default async function LeaderboardsPage() {
 
   return (
     <div className="app-shell">
-      <BrandBar active="leaderboards" />
+      <BrandBar active="leaderboards" user={user} />
       <h1 className="page-h1">leaderboards</h1>
       <div className="page-sub">
         {sends.length} sends across {colorsWithSends.size}{" "}

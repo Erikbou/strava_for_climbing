@@ -1,12 +1,18 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { BrandBar } from "@/components/BrandBar";
 import { UploadForm } from "@/components/UploadForm";
+import { currentUser } from "@/lib/auth";
 
-export default function UploadPage() {
+export const dynamic = "force-dynamic";
+
+export default async function UploadPage() {
+  const user = await currentUser();
+  if (!user) redirect("/sign-in?next=/upload");
   return (
     <div className="app-shell">
-      <BrandBar active="upload" />
+      <BrandBar active="upload" user={user} />
       <Link href="/" className="back-link">
         ‹ back to feed
       </Link>
@@ -17,7 +23,7 @@ export default function UploadPage() {
         score smoothness, and cut the highlight.
       </div>
 
-      <UploadForm />
+      <UploadForm defaultClimber={user.display_name} />
     </div>
   );
 }

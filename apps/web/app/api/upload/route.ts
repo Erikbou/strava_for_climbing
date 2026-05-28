@@ -6,6 +6,8 @@ import { resolve, extname } from "node:path";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { currentUser } from "@/lib/auth";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 600; // long pipelines (pose + render) can take minutes
@@ -36,6 +38,7 @@ async function runPipeline(args: {
   color: string | null;
   gym: string;
   title: string | null;
+  userId: number;
 }): Promise<UploadResult> {
   // Invoke a tiny Python harness that calls orchestrate.process_uploaded_file
   // and prints `ATTEMPT_ID=<n|None>` on its last line. The harness lives in
@@ -78,6 +81,11 @@ async function runPipeline(args: {
 }
 
 export async function POST(req: NextRequest) {
+  const user = await currentUser();
+  if (!user) {
+    return NextResponse.json({ error: "sign-in required" }, { status: 401 });
+  }
+
   let form: FormData;
   try {
     form = await req.formData();
@@ -85,16 +93,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "bad form data" }, { status: 400 });
   }
   const file = form.get("file");
-  const climber = String(form.get("climber") ?? "").trim();
+  // Climber name is always the signed-in user's display name. The form ships
+  // it for backwards compat but we trust the session over the request body.
+  const climber = user.display_name;
   const color = String(form.get("color") ?? "").trim() || null;
   const gym = String(form.get("gym") ?? "").trim();
   const title = String(form.get("title") ?? "").trim() || null;
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "missing file" }, { status: 400 });
-  }
-  if (!climber) {
-    return NextResponse.json({ error: "missing climber" }, { status: 400 });
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
@@ -106,7 +113,14 @@ export async function POST(req: NextRequest) {
   await writeFile(rawPath, bytes);
 
   try {
-    const result = await runPipeline({ rawPath, climber, color, gym, title });
+    const result = await runPipeline({
+      rawPath,
+      climber,
+      color,
+      gym,
+      title,
+      userId: user.id,
+    });
     return NextResponse.json(result);
   } catch (err) {
     console.error("upload pipeline failed", err);

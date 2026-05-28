@@ -1,6 +1,10 @@
 import Link from "next/link";
 
-type Nav = "feed" | "leaderboards" | "profile" | "upload" | "post" | "climber";
+import type { User } from "@/lib/auth";
+
+import { AccountMenu } from "./AccountMenu";
+
+type Nav = "feed" | "leaderboards" | "profile" | "upload" | "post" | "climber" | "auth";
 
 const NAV_ITEMS: { key: Nav; label: string; href: string; img?: string }[] = [
   { key: "feed", label: "feed", href: "/", img: "/nav/feed_button.png" },
@@ -8,7 +12,12 @@ const NAV_ITEMS: { key: Nav; label: string; href: string; img?: string }[] = [
   { key: "profile", label: "profile", href: "/climber", img: "/nav/profile_button.png" },
 ];
 
-export function BrandBar({ active }: { active: Nav }) {
+interface BrandBarProps {
+  active: Nav;
+  user: User | null;
+}
+
+export function BrandBar({ active, user }: BrandBarProps) {
   const navView: Nav =
     active === "feed" || active === "leaderboards" || active === "profile"
       ? active
@@ -28,10 +37,14 @@ export function BrandBar({ active }: { active: Nav }) {
       <nav className="nav-holds" aria-label="primary">
         {NAV_ITEMS.map((item) => {
           const on = navView === item.key;
+          // Signed-in users land directly on their own profile; signed-out
+          // users see the picker.
+          const href =
+            item.key === "profile" && user ? "/climber/me" : item.href;
           return (
             <Link
               key={item.key}
-              href={item.href}
+              href={href}
               className={`nav-hold ${on ? "on" : ""}`.trim()}
               aria-label={item.label}
             >
@@ -42,12 +55,23 @@ export function BrandBar({ active }: { active: Nav }) {
         })}
       </nav>
       <div>
-        {active === "upload" ? (
+        {!user ? (
+          <Link href="/sign-in" className="brand-cta">
+            sign in
+          </Link>
+        ) : active === "upload" ? (
           <span className="brand-cta disabled">uploading</span>
         ) : (
-          <Link href="/upload" className="brand-cta">
-            + upload
-          </Link>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <Link
+              href="/upload"
+              className="brand-cta"
+              style={{ flex: 1, padding: "0 12px", height: 32 }}
+            >
+              + upload
+            </Link>
+            <AccountMenu user={user} />
+          </div>
         )}
       </div>
     </div>

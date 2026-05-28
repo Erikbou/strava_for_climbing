@@ -8,6 +8,7 @@ import { HeroVideo } from "@/components/HeroVideo";
 import { Pill } from "@/components/Pill";
 import { SectionHead } from "@/components/SectionHead";
 import { StatTile } from "@/components/StatTile";
+import { currentUser } from "@/lib/auth";
 import { activityTitle, fmtInt, fmtNumber, formatAge } from "@/lib/format";
 import { lookupGrade } from "@/lib/gym";
 import { videoSrcFor } from "@/lib/media";
@@ -24,7 +25,7 @@ export default async function PostPage({ params }: PageProps) {
   const attemptId = Number(raw);
   if (!Number.isFinite(attemptId) || attemptId <= 0) notFound();
 
-  const a = await attempt(attemptId);
+  const [user, a] = await Promise.all([currentUser(), attempt(attemptId)]);
   if (!a) notFound();
 
   const climber = a.climber_name ?? "Unknown climber";
@@ -40,7 +41,7 @@ export default async function PostPage({ params }: PageProps) {
 
   return (
     <div className="app-shell">
-      <BrandBar active="post" />
+      <BrandBar active="post" user={user} />
       <Link href="/" className="back-link">
         ‹ back to feed
       </Link>

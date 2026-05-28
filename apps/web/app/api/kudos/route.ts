@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { currentUser } from "@/lib/auth";
 import { toggleKudos } from "@/lib/queries";
-import { ensureSessionId } from "@/lib/session";
 
 export async function POST(req: NextRequest) {
+  const user = await currentUser();
+  if (!user) {
+    return NextResponse.json({ error: "sign-in required" }, { status: 401 });
+  }
   let attemptId: number;
   try {
     const body = (await req.json()) as { attemptId?: unknown };
@@ -15,9 +19,8 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(attemptId) || attemptId <= 0) {
     return NextResponse.json({ error: "bad attemptId" }, { status: 400 });
   }
-  const sid = await ensureSessionId();
   try {
-    const count = await toggleKudos(attemptId, sid);
+    const count = await toggleKudos(attemptId, user.id);
     return NextResponse.json({ count });
   } catch (err) {
     console.error("toggleKudos failed", err);
