@@ -78,6 +78,7 @@ class Attempt:
     longest_reach_px: float | None = None
     hang_time_seconds: float | None = None
     idle_seconds: float | None = None
+    title: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

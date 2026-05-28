@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS attempt (
   hang_time_seconds DOUBLE PRECISION,
   idle_seconds    DOUBLE PRECISION,
   posted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  title           TEXT,
   config_hash     TEXT NOT NULL,
   UNIQUE (video_id, start_frame, end_frame)
 );
@@ -88,6 +89,7 @@ ALTER TABLE attempt ADD COLUMN IF NOT EXISTS longest_reach_px  DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS hang_time_seconds DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS idle_seconds      DOUBLE PRECISION;
 ALTER TABLE attempt ADD COLUMN IF NOT EXISTS posted_at         TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS title             TEXT;
 CREATE INDEX IF NOT EXISTS idx_attempt_posted_at ON attempt(posted_at DESC);
 
 CREATE TABLE IF NOT EXISTS hold (
@@ -212,8 +214,8 @@ def upsert_attempt(conn: psycopg.Connection, a: Attempt) -> int:
                             overlay_path, highlight_path,
                             dynamic_moves, longest_reach_px,
                             hang_time_seconds, idle_seconds,
-                            config_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            title, config_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(video_id, start_frame, end_frame) DO UPDATE SET
             climber_id        = EXCLUDED.climber_id,
             route_id          = EXCLUDED.route_id,
@@ -228,6 +230,7 @@ def upsert_attempt(conn: psycopg.Connection, a: Attempt) -> int:
             longest_reach_px  = EXCLUDED.longest_reach_px,
             hang_time_seconds = EXCLUDED.hang_time_seconds,
             idle_seconds      = EXCLUDED.idle_seconds,
+            title             = EXCLUDED.title,
             config_hash       = EXCLUDED.config_hash
         RETURNING id
         """,
@@ -249,6 +252,7 @@ def upsert_attempt(conn: psycopg.Connection, a: Attempt) -> int:
             a.longest_reach_px,
             a.hang_time_seconds,
             a.idle_seconds,
+            a.title,
             a.config_hash,
         ),
     )

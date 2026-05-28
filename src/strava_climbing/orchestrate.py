@@ -139,6 +139,7 @@ def process_one_video(
     climber_name: str | None,
     cfg_hash: str,
     force: bool = False,
+    title: str | None = None,
 ) -> int:
     """Run pose → boundaries → metrics → stats → overlay → highlight for one video.
 
@@ -229,6 +230,7 @@ def process_one_video(
                 longest_reach_px=stats.longest_reach_px,
                 hang_time_seconds=stats.hang_time_seconds,
                 idle_seconds=stats.idle_seconds,
+                title=title if i == 0 else None,
                 config_hash=cfg_hash,
             ),
         )
@@ -278,6 +280,7 @@ def process_uploaded_file(
     climber_name: str,
     color: str | None,
     gym: str,
+    title: str | None = None,
 ) -> int | None:
     """Ingest one uploaded video and run the full pipeline on it.
 
@@ -315,6 +318,7 @@ def process_uploaded_file(
             climber_name=climber_name,
             cfg_hash=cfg_hash,
             force=True,
+            title=title,
         )
         _finalize_smoothness_percentiles(conn, cfg_hash)
 

@@ -27,6 +27,7 @@ def feed(limit: int = 50) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT a.id            AS attempt_id,
+                   a.title         AS title,
                    a.time_seconds  AS time_seconds,
                    a.smoothness_pct AS smoothness_pct,
                    a.dynamic_moves AS dynamic_moves,

@@ -18,7 +18,7 @@ from typing import Any
 import queries
 import streamlit as st
 
-from strava_climbing import orchestrate
+from strava_climbing import orchestrate, titles
 from strava_climbing.config import gym as G
 from strava_climbing.config import paths as P
 
@@ -98,12 +98,8 @@ def _grade_label(color: str | None, gym: str = G.DEFAULT_GYM) -> str | None:
 
 
 def _activity_title(row: dict[str, Any]) -> str:
-    """Activity title generated from the climb metadata."""
-    grade = _grade_for(row.get("route_color"))
-    verb = "Sent" if row["send"] else "Attempted"
-    if row.get("route_color"):
-        return f"{verb} {row['route_color'].title()} · {grade}"
-    return f"{verb} a climb"
+    """Prefer the climber-supplied title; fall back to a deterministic one."""
+    return titles.display_title(row)
 
 
 def _format_age(posted_at: Any) -> str:
@@ -376,39 +372,83 @@ def upload_view() -> None:
         unsafe_allow_html=True,
     )
 
+    # Persist a rotating random title across form interactions; refresh on demand.
+    if "upload_random_title" not in st.session_state:
+        st.session_state["upload_random_title"] = titles.random_title()
+
+    # Title mode picker lives OUTSIDE the form so the random refresh button
+    # can update state without submitting.
+    title_mode = st.radio(
+        "title",
+        options=("auto", "random", "custom"),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="title_mode",
+    )
+
+    custom_title = ""
+    if title_mode == "random":
+        rcols = st.columns([5, 1])
+        with rcols[0]:
+            st.text_input(
+                "random name",
+                value=st.session_state["upload_random_title"],
+                disabled=True,
+                key="random_preview",
+                label_visibility="collapsed",
+            )
+        with rcols[1]:
+            if st.button("↻", key="reroll-title", help="Roll a new name"):
+                st.session_state["upload_random_title"] = titles.random_title()
+                st.rerun()
+    elif title_mode == "custom":
+        custom_title = st.text_input(
+            "name your climb",
+            placeholder="e.g. Wednesday Project, Heel Hook Heaven",
+            key="custom_title",
+            label_visibility="collapsed",
+        )
+    else:  # auto
+        st.caption(
+            "We'll name it from the result + grade — e.g. _Sent Red · V5-V6_."
+        )
+
     with st.form("upload-form", clear_on_submit=False):
         uploaded = st.file_uploader(
-            "Climbing video",
+            "climbing video",
             type=["mp4", "mov", "m4v", "mkv", "webm"],
             accept_multiple_files=False,
-            help="Mobile-shot clips up to ~60 s work best.",
+            help="Mobile-shot portrait clips up to ~60 s work best.",
         )
         cols = st.columns(2)
         with cols[0]:
             climber_name = st.text_input(
-                "Climber name", placeholder="e.g. Niklavs Visockis"
+                "climber name", placeholder="e.g. niklavs visockis"
             )
             color_choices = list(G.COLOR_GRADES[G.DEFAULT_GYM].keys())
             color = st.selectbox(
-                "Hold color (drives the grade)",
+                "hold color (drives the grade)",
                 options=color_choices,
                 index=0,
             )
         with cols[1]:
-            gym = st.text_input("Gym", value=G.DEFAULT_GYM)
+            gym = st.text_input("gym", value=G.DEFAULT_GYM)
             grade_preview = G.lookup(color, gym=gym)
             if grade_preview:
                 st.markdown(
                     f"""
                     <div style="padding:10px 0;">
-                      <div style="color:#6B6B6F;font-size:11px;text-transform:uppercase;
-                                  letter-spacing:0.5px;font-weight:700;">
-                        Inferred grade
+                      <div style="color:#6B6B6F;font-size:10px;text-transform:lowercase;
+                                  letter-spacing:0.6px;font-weight:800;">
+                        inferred grade
                       </div>
-                      <div style="font-size:24px;font-weight:800;color:#ff9a1f;">
+                      <div style="font-size:28px;font-weight:800;color:#ff9a1f;
+                                  letter-spacing:-0.02em;">
                         {grade_preview['grade']}
                       </div>
-                      <div style="color:#6B6B6F;font-size:13px;">{grade_preview['label']}</div>
+                      <div style="color:#6B6B6F;font-size:13px;">
+                        {grade_preview['label'].lower()}
+                      </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -417,7 +457,7 @@ def upload_view() -> None:
                 st.caption("Grade lookup only configured for Klättercentret Akalla in v1.")
 
         submitted = st.form_submit_button(
-            "Analyze climb", type="primary", use_container_width=True
+            "analyze climb", type="primary", use_container_width=True
         )
 
     if not submitted:
@@ -428,6 +468,15 @@ def upload_view() -> None:
     if not climber_name.strip():
         st.error("Climber name is required.")
         return
+
+    # Resolve title: None means "let auto_title fill in from metadata".
+    if title_mode == "random":
+        chosen_title: str | None = st.session_state["upload_random_title"]
+    elif title_mode == "custom":
+        chosen_title = custom_title.strip() or None
+    else:
+        chosen_title = None
+
     size_mb = uploaded.size / (1024 * 1024)
     if size_mb > 25:
         st.warning(
@@ -436,7 +485,9 @@ def upload_view() -> None:
             "of one attempt. Continuing anyway."
         )
 
-    attempt_id = _run_upload_pipeline(uploaded, climber_name.strip(), color, gym.strip())
+    attempt_id = _run_upload_pipeline(
+        uploaded, climber_name.strip(), color, gym.strip(), chosen_title,
+    )
     if attempt_id is None:
         st.warning(
             "Processing finished but no climber track was found. Common causes:\n\n"
@@ -456,7 +507,13 @@ def upload_view() -> None:
     go("post", attempt_id=attempt_id)
 
 
-def _run_upload_pipeline(uploaded: Any, climber_name: str, color: str, gym: str) -> int | None:
+def _run_upload_pipeline(
+    uploaded: Any,
+    climber_name: str,
+    color: str,
+    gym: str,
+    title: str | None,
+) -> int | None:
     P.ensure_dirs()
     raw_bytes = uploaded.getbuffer()
     sha = hashlib.sha256(raw_bytes).hexdigest()
@@ -473,4 +530,5 @@ def _run_upload_pipeline(uploaded: Any, climber_name: str, color: str, gym: str)
             climber_name=climber_name,
             color=color,
             gym=gym,
+            title=title,
         )
