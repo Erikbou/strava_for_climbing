@@ -74,7 +74,8 @@ def test_manual_route_trigger_blocks_overwrite(sqlite_db):
             route_source=RouteSource.MANUAL, config_hash="cfg-1",
         ),
     )
-    conn = sqlite_db._conn()  # internal access for the trigger probe
+    import strava_climbing._backend_sqlite as backend
+    conn = backend._conn()  # internal access for the trigger probe
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "UPDATE attempt SET route_source = 'auto' WHERE route_id = ?", (route_id,)
