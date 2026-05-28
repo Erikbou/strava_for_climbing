@@ -1,8 +1,8 @@
-"""Artemis dashboard — Strava-style feed, post detail, profile.
+"""Artemis dashboard — single-page feed, post detail, profile.
 
-Single-page app; view selection lives in `st.query_params["view"]` so links
-are refresh-safe and shareable. Visual language matches the landing page
-at https://artemis.spcf.app/ (lowercase wordmark, amber-orange gradient,
+View selection lives in `st.query_params["view"]` so links are refresh-safe
+and shareable. Visual language matches the landing page at
+https://artemis.spcf.app/ (lowercase wordmark, amber-orange gradient,
 SF Pro Rounded, pill-shaped CTAs).
 """
 
@@ -173,13 +173,14 @@ st.markdown(
       .stButton > button {
         border-radius: 999px !important;
         font-weight: 700 !important;
-        padding: 8px 22px !important;
-        font-size: 14px !important;
+        padding: 6px 14px !important;
+        font-size: 13px !important;
         letter-spacing: -0.005em !important;
         border: 1.5px solid var(--field-border) !important;
         background: var(--bg) !important;
         color: var(--ink) !important;
         transition: filter 120ms ease, transform 80ms ease !important;
+        white-space: nowrap !important;
       }
       .stButton > button:hover {
         filter: brightness(0.97);
@@ -251,7 +252,7 @@ def _brand_bar() -> None:
               <div style="font-size: 10px; color: var(--muted);
                           text-transform: lowercase; letter-spacing: 1.6px;
                           font-weight: 800; margin-top: 4px;">
-                strava for climbing
+                sports technology
               </div>
             </div>
             """,

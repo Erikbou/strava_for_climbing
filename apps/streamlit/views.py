@@ -1,11 +1,11 @@
-"""Strava-style feed, post detail, profile.
+"""Artemis views: feed, post detail, profile, upload.
 
 Single-page app. View selection lives in ``st.query_params["view"]``. All
 data access goes through ``queries`` so caching and read-only mode are
 honoured uniformly. The visual chrome (cards, stat tiles, avatars, badges)
 is composed from HTML fragments emitted via ``st.markdown(...,
 unsafe_allow_html=True)`` because Streamlit's primitives can't quite hit
-Strava's density and hierarchy.
+the density and hierarchy we want.
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def _grade_label(color: str | None, gym: str = G.DEFAULT_GYM) -> str | None:
 
 
 def _activity_title(row: dict[str, Any]) -> str:
-    """Strava-style activity title generated from the climb metadata."""
+    """Activity title generated from the climb metadata."""
     grade = _grade_for(row.get("route_color"))
     verb = "Sent" if row["send"] else "Attempted"
     if row.get("route_color"):
@@ -194,13 +194,22 @@ def _feed_card(r: dict[str, Any]) -> None:
 
     # Streamlit-native action row beneath the card (HTML buttons can't trigger
     # reruns, and st.button can't live inside the HTML fragment).
-    cta = st.columns([1, 1, 6])
+    cta = st.columns([2, 2, 4])
     with cta[0]:
-        if st.button("View", key=f"view-{r['attempt_id']}", type="primary"):
+        if st.button(
+            "view",
+            key=f"view-{r['attempt_id']}",
+            type="primary",
+            use_container_width=True,
+        ):
             go("post", attempt_id=r["attempt_id"])
     with cta[1]:
         cid = r.get("climber_id")
-        if cid is not None and st.button("Profile", key=f"prof-{r['attempt_id']}"):
+        if cid is not None and st.button(
+            "profile",
+            key=f"prof-{r['attempt_id']}",
+            use_container_width=True,
+        ):
             go("profile", climber_id=cid)
 
 
@@ -339,7 +348,12 @@ def profile_view(climber_id: int) -> None:
             """,
             unsafe_allow_html=True,
         )
-        if st.button("Open post", key=f"open-{r['attempt_id']}", type="secondary"):
+        if st.button(
+            "open post",
+            key=f"open-{r['attempt_id']}",
+            type="secondary",
+            use_container_width=True,
+        ):
             go("post", attempt_id=r["attempt_id"])
 
 
