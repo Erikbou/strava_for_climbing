@@ -9,11 +9,20 @@ import type { NextRequest } from "next/server";
  *  seek without downloading the whole file. */
 
 function mediaRoots(): string[] {
+  const roots: string[] = [];
   const explicit = process.env.ARTEMIS_MEDIA_ROOT;
-  if (explicit) return [resolve(explicit)];
-  // Default: repo root's data/ directory, derived from CWD.
-  // The web app runs from `apps/web/`, so go two levels up.
-  return [resolve(process.cwd(), "..", "..", "data"), resolve(process.cwd(), "data")];
+  if (explicit) {
+    // Allow comma-separated list of paths, each resolved against apps/web's cwd.
+    for (const p of explicit.split(",")) {
+      const trimmed = p.trim();
+      if (trimmed) roots.push(resolve(process.cwd(), trimmed));
+    }
+  } else {
+    // Default: repo root's data/ directory + this app's own data/.
+    roots.push(resolve(process.cwd(), "..", "..", "data"));
+    roots.push(resolve(process.cwd(), "data"));
+  }
+  return roots;
 }
 
 function safeResolve(requested: string): string | null {
@@ -22,7 +31,8 @@ function safeResolve(requested: string): string | null {
     const withSep = root.endsWith(sep) ? root : root + sep;
     if (candidate === root || candidate.startsWith(withSep)) {
       try {
-        statSync(candidate);
+        const s = statSync(candidate);
+        if (!s.isFile()) return null;
         return candidate;
       } catch {
         return null;

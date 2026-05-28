@@ -16,11 +16,14 @@ function repoRoot(): string {
 }
 
 function pythonBin(): string {
-  return (
-    process.env.ARTEMIS_PYTHON ||
-    resolve(repoRoot(), ".venv/bin/python") ||
-    "python3"
-  );
+  // ARTEMIS_PYTHON is configured relative to apps/web (matching the build
+  // workdir). spawn() resolves against the child cwd (repoRoot) so we
+  // resolve to an absolute path here first.
+  const env = process.env.ARTEMIS_PYTHON;
+  if (env) {
+    return resolve(process.cwd(), env);
+  }
+  return resolve(repoRoot(), ".venv/bin/python");
 }
 
 interface UploadResult {

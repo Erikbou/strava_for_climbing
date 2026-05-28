@@ -1,32 +1,3 @@
-build "dashboard" {
-  base = "python"
-}
-
-service "dashboard" {
-  build   = build.dashboard
-  command = "streamlit run apps/streamlit/main.py --server.port $PORT --server.address 0.0.0.0 --server.headless true"
-
-  endpoint {
-    public = true
-    health_check {
-      path = "/_stcore/health"
-    }
-  }
-
-  env = {
-    PORT          = port
-    DATABASE_URL  = postgres.main.url
-    S3_ENDPOINT   = storage.media.endpoint
-    S3_ACCESS_KEY = storage.media.access_key
-    S3_SECRET_KEY = storage.media.secret_key
-    S3_BUCKET     = storage.media.bucket
-  }
-
-  dev {
-    command = ".venv/bin/streamlit run apps/streamlit/main.py --server.port $PORT --server.address 0.0.0.0 --server.headless true"
-  }
-}
-
 build "web" {
   base    = "node"
   workdir = "apps/web"
@@ -34,7 +5,7 @@ build "web" {
 
 service "web" {
   build   = build.web
-  command = "pnpm start"
+  command = "cd apps/web && npx next start --port $PORT"
 
   endpoint {
     public = true
@@ -47,15 +18,18 @@ service "web" {
     PORT               = port
     DATABASE_URL       = postgres.main.url
     ARTEMIS_PYTHON     = "../../.venv/bin/python"
+    # Comma-separated list of allowed media roots, each resolved against
+    # apps/web's cwd. Extend locally (e.g. via your shell env) to whitelist
+    # sibling data directories from other worktrees during migration.
     ARTEMIS_MEDIA_ROOT = "../../data"
     S3_ENDPOINT        = storage.media.endpoint
     S3_ACCESS_KEY      = storage.media.access_key
     S3_SECRET_KEY      = storage.media.secret_key
-    S3_BUCKET          = storage.media.bucket
+    S3_BUCKET           = storage.media.bucket
   }
 
   dev {
-    command = "pnpm dev"
+    command = "cd apps/web && npx next dev --port $PORT --hostname 0.0.0.0"
   }
 }
 
