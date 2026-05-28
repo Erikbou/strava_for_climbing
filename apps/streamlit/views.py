@@ -1,8 +1,11 @@
-"""Render functions for the three Strava-style views: feed, post, profile.
+"""Strava-style feed, post detail, profile.
 
-Single-page app. View selection lives in ``st.session_state["view"]`` /
-``st.query_params``. All read access goes through ``queries`` so caching and
-read-only mode are honoured uniformly.
+Single-page app. View selection lives in ``st.query_params["view"]``. All
+data access goes through ``queries`` so caching and read-only mode are
+honoured uniformly. The visual chrome (cards, stat tiles, avatars, badges)
+is composed from HTML fragments emitted via ``st.markdown(...,
+unsafe_allow_html=True)`` because Streamlit's primitives can't quite hit
+Strava's density and hierarchy.
 """
 
 from __future__ import annotations
@@ -21,33 +24,86 @@ from strava_climbing.config import paths as P
 
 STRAVA_ORANGE = "#FC4C02"
 
-# --- view router helpers ----------------------------------------------------
+# Stable palette for color swatches in badges (matches CSS rules in main.py).
+_COLOR_SWATCHES = {
+    "white": "#F5F5F5", "yellow": "#F5C400", "orange": "#FC4C02",
+    "green": "#2EA44F", "blue": "#1F6FEB", "red": "#D7263D",
+    "purple": "#7C3AED", "black": "#1F2328", "pink": "#EC4899",
+}
 
+
+# ---------------------------------------------------------------------------
+# Routing helpers
+# ---------------------------------------------------------------------------
 
 def go(view: str, **params: Any) -> None:
-    """Set the current view and re-run. Query params keep refresh-safe URLs."""
+    """Set the current view + params and rerun. Refresh-safe URLs."""
+    st.query_params.clear()
     st.query_params["view"] = view
     for k, v in params.items():
         st.query_params[k] = str(v)
     st.rerun()
 
 
-def back_button(label: str = "← Back to feed") -> None:
-    if st.button(label, type="secondary"):
+def back_button(label: str = "Back to feed") -> None:
+    if st.button(label, key=f"back-{label}", type="secondary"):
         go("feed")
 
 
-# --- shared formatting ------------------------------------------------------
+# ---------------------------------------------------------------------------
+# HTML fragment builders
+# ---------------------------------------------------------------------------
+
+def _initials(name: str | None) -> str:
+    if not name:
+        return "?"
+    parts = [p for p in name.strip().split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
 
 
-def _grade_for(color: str | None) -> str:
-    g = G.lookup(color)
+def _avatar(name: str | None, *, size: str = "") -> str:
+    cls = "avatar" + (f" {size}" if size else "")
+    return f'<div class="{cls}">{_initials(name)}</div>'
+
+
+def _color_badge(color: str | None) -> str:
+    if not color:
+        return '<span class="badge-color"><span class="swatch" style="background:#ccc"></span>untagged</span>'
+    swatch = _COLOR_SWATCHES.get(color.lower(), "#888")
+    return (
+        f'<span class="badge-color">'
+        f'<span class="swatch" style="background:{swatch}"></span>{color}'
+        f'</span>'
+    )
+
+
+def _send_badge(send: bool) -> str:
+    cls = "badge badge-send" if send else "badge badge-attempt"
+    text = "Send" if send else "Attempt"
+    return f'<span class="{cls}">{text}</span>'
+
+
+def _grade_for(color: str | None, gym: str = G.DEFAULT_GYM) -> str:
+    g = G.lookup(color, gym=gym)
     return g["grade"] if g else "—"
 
 
-def _grade_label_for(color: str | None) -> str | None:
-    g = G.lookup(color)
+def _grade_label(color: str | None, gym: str = G.DEFAULT_GYM) -> str | None:
+    g = G.lookup(color, gym=gym)
     return g["label"] if g else None
+
+
+def _activity_title(row: dict[str, Any]) -> str:
+    """Strava-style activity title generated from the climb metadata."""
+    grade = _grade_for(row.get("route_color"))
+    verb = "Sent" if row["send"] else "Attempted"
+    if row.get("route_color"):
+        return f"{verb} {row['route_color'].title()} · {grade}"
+    return f"{verb} a climb"
 
 
 def _format_age(posted_at: Any) -> str:
@@ -56,7 +112,7 @@ def _format_age(posted_at: Any) -> str:
     delta = datetime.now(posted_at.tzinfo) - posted_at
     secs = int(delta.total_seconds())
     if secs < 60:
-        return "just now"
+        return "Just now"
     if secs < 3600:
         return f"{secs // 60}m ago"
     if secs < 86400:
@@ -64,55 +120,39 @@ def _format_age(posted_at: Any) -> str:
     return f"{secs // 86400}d ago"
 
 
-def _colored_badge(color: str | None) -> str:
-    if not color:
-        return "<span style='color:#888'>untagged</span>"
-    swatch = {
-        "white": "#F5F5F5", "yellow": "#F5C400", "orange": "#FC4C02",
-        "green": "#2EA44F", "blue": "#1F6FEB", "red": "#D7263D",
-        "purple": "#7C3AED", "black": "#1F2328", "pink": "#EC4899",
-    }.get(color.lower(), "#888")
-    text = "#1F2328" if color.lower() in {"white", "yellow", "pink"} else "#FFFFFF"
+def _stat_value(v: Any, *, fmt: str = "{:g}", default: str = "—") -> str:
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return fmt.format(v)
+    return str(v)
+
+
+def _stat_tile(label: str, value: str) -> str:
     return (
-        f"<span style='background:{swatch};color:{text};padding:2px 10px;"
-        f"border-radius:999px;font-size:12px;font-weight:600'>{color}</span>"
+        f'<div class="tile">'
+        f'<div class="value">{value}</div>'
+        f'<div class="label">{label}</div>'
+        f'</div>'
     )
 
 
-def _send_badge(send: bool) -> str:
-    if send:
-        return (
-            f"<span style='background:{STRAVA_ORANGE};color:#fff;padding:2px 10px;"
-            f"border-radius:999px;font-size:12px;font-weight:700'>SEND</span>"
-        )
-    return (
-        "<span style='background:#E5E5E5;color:#555;padding:2px 10px;"
-        "border-radius:999px;font-size:12px;font-weight:600'>ATTEMPT</span>"
-    )
-
-
-# --- views ------------------------------------------------------------------
-
+# ---------------------------------------------------------------------------
+# Views
+# ---------------------------------------------------------------------------
 
 def feed_view() -> None:
-    header = st.columns([4, 1])
-    with header[0]:
-        st.markdown(
-            f"<h1 style='color:{STRAVA_ORANGE};margin-bottom:0'>Strava for Climbing</h1>"
-            "<p style='color:#666;margin-top:4px'>Feed · recent climbs by everyone</p>",
-            unsafe_allow_html=True,
-        )
-    with header[1]:
-        st.write("")
-        if st.button("Upload climb", type="primary", use_container_width=True):
-            go("upload")
+    st.markdown(
+        "<div class='section-h'>Following · recent climbs</div>",
+        unsafe_allow_html=True,
+    )
 
     rows = queries.feed()
     if not rows:
         st.info(
-            "No climbs yet. Tap **Upload climb** above to add the first one — the "
-            "pipeline runs pose detection on your video, picks attempt boundaries, "
-            "computes body stats, and renders a highlight clip."
+            "Your feed is empty. Tap **+ Upload** in the top bar to drop in a "
+            "30-90 s bouldering clip — we'll detect pose, time the send, "
+            "score smoothness, and cut a highlight."
         )
         return
 
@@ -120,14 +160,205 @@ def feed_view() -> None:
         _feed_card(r)
 
 
+def _feed_card(r: dict[str, Any]) -> None:
+    climber = r.get("climber_name") or "Unknown climber"
+    gym = r.get("gym_name") or "Unknown gym"
+    age = _format_age(r.get("posted_at"))
+    title = _activity_title(r)
+
+    st.markdown(
+        f"""
+        <div class="activity-card">
+          <div class="activity-head">
+            {_avatar(climber)}
+            <div class="meta">
+              <div class="name">{climber}</div>
+              <div class="time">{age} · {gym}</div>
+            </div>
+            <div>{_send_badge(bool(r['send']))}</div>
+          </div>
+          <div class="activity-title">{title}</div>
+          <div style="padding: 0 16px 12px 16px;">
+            {_color_badge(r.get("route_color"))}
+          </div>
+          <div class="stat-row">
+            {_stat_tile("Time", _stat_value(r.get("time_seconds"), fmt="{:.1f}s"))}
+            {_stat_tile("Dynamic", _stat_value(r.get("dynamic_moves"), fmt="{:d}"))}
+            {_stat_tile("Smoothness", _stat_value(r.get("smoothness_pct"), fmt="{:.0f}"))}
+            {_stat_tile("Hang", _stat_value(r.get("hang_time_seconds"), fmt="{:.1f}s"))}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Streamlit-native action row beneath the card (HTML buttons can't trigger
+    # reruns, and st.button can't live inside the HTML fragment).
+    cta = st.columns([1, 1, 6])
+    with cta[0]:
+        if st.button("View", key=f"view-{r['attempt_id']}", type="primary"):
+            go("post", attempt_id=r["attempt_id"])
+    with cta[1]:
+        cid = r.get("climber_id")
+        if cid is not None and st.button("Profile", key=f"prof-{r['attempt_id']}"):
+            go("profile", climber_id=cid)
+
+
+def post_view(attempt_id: int) -> None:
+    a = queries.attempt(attempt_id)
+    if a is None:
+        st.error(f"Post not found (attempt {attempt_id}).")
+        back_button()
+        return
+
+    back_button()
+
+    climber = a.get("climber_name") or "Unknown climber"
+    gym = a.get("gym_name") or "Unknown gym"
+    age = _format_age(a.get("posted_at"))
+    color = a.get("route_color")
+    grade = _grade_for(color)
+    grade_label = _grade_label(color) or ""
+    title = _activity_title(a)
+
+    header_style = (
+        "padding: 0 0 16px 0; border-bottom: 1px solid #ECECEC; "
+        "margin-bottom: 16px;"
+    )
+    title_style = (
+        "margin: 0 0 6px 0; font-size: 28px; font-weight: 800; color: #1F2328;"
+    )
+    st.markdown(
+        f"""
+        <div class="activity-head" style="{header_style}">
+          {_avatar(climber, size="lg")}
+          <div class="meta">
+            <div style="font-size:20px;font-weight:800;color:#1F2328;">{climber}</div>
+            <div style="font-size:13px;color:#8A8F98;">{age} · {gym}</div>
+          </div>
+          <div>{_send_badge(bool(a['send']))}</div>
+        </div>
+        <h1 style="{title_style}">{title}</h1>
+        <div style="margin-bottom: 8px;">
+          {_color_badge(color)} &nbsp;
+          <span style="font-size:20px;font-weight:800;color:#FC4C02;">{grade}</span>
+          <span style="color:#8A8F98;font-size:13px;">· {grade_label}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Highlight clip first — most visceral piece of the post.
+    highlight = a.get("highlight_path")
+    if highlight and Path(highlight).exists():
+        st.markdown("<div class='section-h'>Highlight</div>", unsafe_allow_html=True)
+        with open(highlight, "rb") as f:
+            st.video(f, format="video/mp4")
+
+    # Stat grid.
+    st.markdown("<div class='section-h'>Stats</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="stat-grid">
+          {_stat_tile("Time to top", _stat_value(a.get("time_seconds"), fmt="{:.1f}s"))}
+          {_stat_tile("Smoothness", _stat_value(a.get("smoothness_pct"), fmt="{:.0f}"))}
+          {_stat_tile("Dynamic moves", _stat_value(a.get("dynamic_moves"), fmt="{:d}"))}
+          {_stat_tile("Longest reach", _stat_value(a.get("longest_reach_px"), fmt="{:.0f} px"))}
+          {_stat_tile("Hang on hardest", _stat_value(a.get("hang_time_seconds"), fmt="{:.1f}s"))}
+          {_stat_tile("Idle / rest", _stat_value(a.get("idle_seconds"), fmt="{:.1f}s"))}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Full skeleton overlay further down — secondary in the visual hierarchy.
+    overlay = a.get("overlay_path")
+    if overlay and Path(overlay).exists():
+        st.markdown("<div class='section-h'>Full climb · skeleton overlay</div>", unsafe_allow_html=True)
+        with open(overlay, "rb") as f:
+            st.video(f, format="video/mp4")
+    else:
+        st.caption("Skeleton overlay not available for this attempt.")
+
+
+def profile_view(climber_id: int) -> None:
+    c = queries.climber(climber_id)
+    if c is None:
+        st.error(f"Climber not found (id {climber_id}).")
+        back_button()
+        return
+
+    back_button()
+
+    fastest = c.get("fastest_send_seconds")
+    name = c["name"]
+    st.markdown(
+        f"""
+        <div class="profile-head">
+          {_avatar(name, size="lg")}
+          <div>
+            <div class="name">{name}</div>
+            <div class="sub">Climber profile</div>
+          </div>
+        </div>
+        <div class="stat-grid" style="grid-template-columns: repeat(3, 1fr);">
+          {_stat_tile("Sends", _stat_value(c.get("sends"), fmt="{:d}", default="0"))}
+          {_stat_tile("Attempts", _stat_value(c.get("attempts_logged"), fmt="{:d}", default="0"))}
+          {_stat_tile("Fastest send", _stat_value(fastest, fmt="{:.1f}s"))}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='section-h'>Recent climbs</div>", unsafe_allow_html=True)
+    rows = queries.climber_attempts(climber_id)
+    if not rows:
+        st.caption("No climbs logged yet.")
+        return
+
+    for r in rows:
+        color = r.get("route_color")
+        gym = r.get("gym_name") or "Unknown gym"
+        age = _format_age(r.get("posted_at"))
+        st.markdown(
+            f"""
+            <div class="activity-card" style="margin-bottom: 10px;">
+              <div style="padding: 12px 16px;">
+                <div style="display:flex;align-items:center;gap:12px;">
+                  <div style="flex:1;min-width:0;">
+                    {_color_badge(color)}
+                    &nbsp; <strong style="color:#1F2328;">{_grade_for(color)}</strong>
+                    &nbsp; {_send_badge(bool(r['send']))}
+                    <div style="color:#8A8F98;font-size:12px;margin-top:6px;">
+                      {age} · {gym} · {r['time_seconds']:.1f}s
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Open post", key=f"open-{r['attempt_id']}", type="secondary"):
+            go("post", attempt_id=r["attempt_id"])
+
+
+# ---------------------------------------------------------------------------
+# Upload
+# ---------------------------------------------------------------------------
+
 def upload_view() -> None:
     back_button()
     st.markdown(
-        f"<h2 style='color:{STRAVA_ORANGE};margin-bottom:0'>Upload a climb</h2>"
-        "<p style='color:#666;margin-top:4px'>"
-        "Drop in a short bouldering clip. We'll detect pose, time the send, "
-        "score smoothness, and cut a highlight."
-        "</p>",
+        """
+        <h1 style="font-size:28px;font-weight:800;color:#1F2328;margin:8px 0 4px 0;">
+          Upload a climb
+        </h1>
+        <p style="color:#8A8F98;font-size:14px;margin:0 0 18px 0;">
+          30-90 second portrait clip works best. We'll detect pose, time the
+          send, score smoothness, and cut a highlight.
+        </p>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -136,7 +367,7 @@ def upload_view() -> None:
             "Climbing video",
             type=["mp4", "mov", "m4v", "mkv", "webm"],
             accept_multiple_files=False,
-            help="Mobile-shot clips up to ~60s work best.",
+            help="Mobile-shot clips up to ~60 s work best.",
         )
         cols = st.columns(2)
         with cols[0]:
@@ -153,11 +384,20 @@ def upload_view() -> None:
             gym = st.text_input("Gym", value=G.DEFAULT_GYM)
             grade_preview = G.lookup(color, gym=gym)
             if grade_preview:
-                st.metric(
-                    "Inferred grade",
-                    grade_preview["grade"],
-                    delta=grade_preview["label"],
-                    delta_color="off",
+                st.markdown(
+                    f"""
+                    <div style="padding:10px 0;">
+                      <div style="color:#8A8F98;font-size:11px;text-transform:uppercase;
+                                  letter-spacing:0.5px;font-weight:700;">
+                        Inferred grade
+                      </div>
+                      <div style="font-size:24px;font-weight:800;color:#FC4C02;">
+                        {grade_preview['grade']}
+                      </div>
+                      <div style="color:#8A8F98;font-size:13px;">{grade_preview['label']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
             else:
                 st.caption("Grade lookup only configured for Klättercentret Akalla in v1.")
@@ -211,8 +451,8 @@ def _run_upload_pipeline(uploaded: Any, climber_name: str, color: str, gym: str)
     raw_path.write_bytes(raw_bytes)
 
     with st.spinner(
-        "Normalizing video → running YOLO11l pose → boundary detection → "
-        "stats → overlay + highlight render. First run downloads model weights."
+        "Normalizing video, running pose detection, deriving stats, "
+        "rendering overlay and highlight..."
     ):
         return orchestrate.process_uploaded_file(
             raw_path,
@@ -220,183 +460,3 @@ def _run_upload_pipeline(uploaded: Any, climber_name: str, color: str, gym: str)
             color=color,
             gym=gym,
         )
-
-
-def _feed_card(r: dict[str, Any]) -> None:
-    with st.container(border=True):
-        # Header row
-        top = st.columns([3, 1])
-        with top[0]:
-            climber = r.get("climber_name") or "Unknown climber"
-            gym = r.get("gym_name") or "Unknown gym"
-            posted = _format_age(r.get("posted_at"))
-            st.markdown(
-                f"**{climber}** · {gym}  \n"
-                f"<span style='color:#888;font-size:12px'>{posted}</span>",
-                unsafe_allow_html=True,
-            )
-        with top[1]:
-            st.markdown(
-                f"<div style='text-align:right'>{_send_badge(r['send'])}</div>",
-                unsafe_allow_html=True,
-            )
-
-        # Grade + color line
-        color = r.get("route_color")
-        grade = _grade_for(color)
-        st.markdown(
-            f"{_colored_badge(color)} &nbsp; "
-            f"<span style='font-size:18px;font-weight:700'>{grade}</span>",
-            unsafe_allow_html=True,
-        )
-
-        # Stats row
-        m = st.columns(4)
-        m[0].metric("Time", f"{r['time_seconds']:.1f}s")
-        m[1].metric("Dynamic moves", r.get("dynamic_moves") if r.get("dynamic_moves") is not None else "—")
-        m[2].metric(
-            "Smoothness",
-            f"{r['smoothness_pct']:.0f}" if r.get("smoothness_pct") is not None else "—",
-        )
-        m[3].metric(
-            "Hang time",
-            f"{r['hang_time_seconds']:.1f}s" if r.get("hang_time_seconds") else "—",
-        )
-
-        # CTA row
-        cta = st.columns([1, 1, 3])
-        with cta[0]:
-            if st.button("View post", key=f"view-{r['attempt_id']}", type="primary"):
-                go("post", attempt_id=r["attempt_id"])
-        with cta[1]:
-            cid = r.get("climber_id")
-            if cid is not None and st.button("Profile", key=f"prof-{r['attempt_id']}"):
-                go("profile", climber_id=cid)
-
-
-def post_view(attempt_id: int) -> None:
-    a = queries.attempt(attempt_id)
-    if a is None:
-        st.error(f"Post not found (attempt {attempt_id}).")
-        back_button()
-        return
-
-    back_button()
-
-    # Title block
-    climber = a.get("climber_name") or "Unknown climber"
-    gym = a.get("gym_name") or "Unknown gym"
-    posted = _format_age(a.get("posted_at"))
-    st.markdown(
-        f"<h2 style='margin-bottom:0'>{climber}'s climb at {gym}</h2>"
-        f"<div style='color:#888'>{posted}</div>",
-        unsafe_allow_html=True,
-    )
-
-    color = a.get("route_color")
-    grade_info = G.lookup(color) or {}
-    grade = grade_info.get("grade", "—")
-    label = grade_info.get("label", "")
-    st.markdown(
-        f"{_colored_badge(color)} &nbsp; "
-        f"<span style='font-size:22px;font-weight:700'>{grade}</span> "
-        f"<span style='color:#888'>· {label}</span> &nbsp; {_send_badge(bool(a['send']))}",
-        unsafe_allow_html=True,
-    )
-    st.divider()
-
-    # Stats grid
-    st.subheader("Climb stats")
-    grid = st.columns(4)
-    grid[0].metric("Time to top", f"{a['time_seconds']:.1f}s")
-    grid[1].metric(
-        "Dynamic moves",
-        a.get("dynamic_moves") if a.get("dynamic_moves") is not None else "—",
-    )
-    grid[2].metric(
-        "Longest reach",
-        f"{a['longest_reach_px']:.0f}px" if a.get("longest_reach_px") else "—",
-    )
-    grid[3].metric(
-        "Hang on hardest move",
-        f"{a['hang_time_seconds']:.1f}s" if a.get("hang_time_seconds") else "—",
-    )
-
-    grid2 = st.columns(4)
-    grid2[0].metric(
-        "Smoothness",
-        f"{a['smoothness_pct']:.0f}" if a.get("smoothness_pct") is not None else "—",
-    )
-    grid2[1].metric(
-        "Idle/rest",
-        f"{a['idle_seconds']:.1f}s" if a.get("idle_seconds") else "—",
-    )
-
-    # Highlight clip
-    st.divider()
-    st.subheader("Highlight")
-    highlight = a.get("highlight_path")
-    if highlight and Path(highlight).exists():
-        with open(highlight, "rb") as f:
-            st.video(f, format="video/mp4")
-    else:
-        st.caption("Highlight clip not available yet — run the pipeline to generate.")
-
-    # Full overlay
-    st.subheader("Full climb · skeleton overlay")
-    overlay = a.get("overlay_path")
-    if overlay and Path(overlay).exists():
-        with open(overlay, "rb") as f:
-            st.video(f, format="video/mp4")
-    else:
-        st.caption(
-            "Overlay not available. The annotated video lives at "
-            f"`{overlay}` once the pipeline writes it."
-        )
-
-
-def profile_view(climber_id: int) -> None:
-    c = queries.climber(climber_id)
-    if c is None:
-        st.error(f"Climber not found (id {climber_id}).")
-        back_button()
-        return
-
-    back_button()
-
-    st.markdown(
-        f"<h2 style='margin-bottom:0'>{c['name']}</h2>"
-        f"<div style='color:#888'>Climber profile</div>",
-        unsafe_allow_html=True,
-    )
-
-    st.divider()
-    cols = st.columns(3)
-    cols[0].metric("Sends", c.get("sends") or 0)
-    cols[1].metric("Attempts logged", c.get("attempts_logged") or 0)
-    fastest = c.get("fastest_send_seconds")
-    cols[2].metric("Fastest send", f"{fastest:.1f}s" if fastest is not None else "—")
-
-    st.divider()
-    st.subheader("Recent climbs")
-    rows = queries.climber_attempts(climber_id)
-    if not rows:
-        st.caption("No climbs logged for this climber yet.")
-        return
-    for r in rows:
-        with st.container(border=True):
-            line = st.columns([4, 1])
-            with line[0]:
-                color = r.get("route_color")
-                gym = r.get("gym_name") or "Unknown gym"
-                st.markdown(
-                    f"{_colored_badge(color)} &nbsp; **{_grade_for(color)}** "
-                    f"<span style='color:#888'>· {gym}</span> &nbsp; "
-                    f"{_send_badge(bool(r['send']))}  \n"
-                    f"<span style='color:#888;font-size:12px'>"
-                    f"{_format_age(r.get('posted_at'))} · {r['time_seconds']:.1f}s</span>",
-                    unsafe_allow_html=True,
-                )
-            with line[1]:
-                if st.button("Open", key=f"open-{r['attempt_id']}"):
-                    go("post", attempt_id=r["attempt_id"])
