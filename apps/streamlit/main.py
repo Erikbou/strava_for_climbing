@@ -344,6 +344,22 @@ st.markdown(
         padding: var(--s-3) clamp(12px, 4vw, 24px);
         border-bottom: 1px solid var(--hairline);
       }
+      /* Vertically center brand-bar items (logotype + home + upload).
+         Targets only the horizontal block that contains the logotype. */
+      [data-testid="stHorizontalBlock"]:has(img[alt="artemis"]) {
+        align-items: center !important;
+      }
+      [data-testid="stHorizontalBlock"]:has(img[alt="artemis"])
+        [data-testid="stColumn"] {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      /* Tighten the empty-spacer markdown so it doesn't push buttons down. */
+      [data-testid="stHorizontalBlock"]:has(img[alt="artemis"])
+        [data-testid="stMarkdownContainer"]:empty {
+        display: none;
+      }
 
       /* ---------- Active nav state ---------- */
       .nav-active .stButton > button {
@@ -442,7 +458,6 @@ def _brand_bar() -> None:
                 unsafe_allow_html=True,
             )
     with cols[1]:
-        st.write("")
         if view == "feed":
             st.markdown("<div class='nav-active'>", unsafe_allow_html=True)
         if st.button(
@@ -457,7 +472,6 @@ def _brand_bar() -> None:
         if view == "feed":
             st.markdown("</div>", unsafe_allow_html=True)
     with cols[2]:
-        st.write("")
         # On the upload view the CTA becomes a "you are here" pill — secondary
         # styling with the nav-active highlight; off-upload it's the full
         # gradient primary CTA so the call-to-action still pops.
