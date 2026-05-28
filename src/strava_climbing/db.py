@@ -71,9 +71,24 @@ CREATE TABLE IF NOT EXISTS attempt (
   attempts_count  INTEGER NOT NULL CHECK (attempts_count >= 1),
   route_source    TEXT NOT NULL CHECK (route_source IN ('manual','auto','unassigned')),
   overlay_path    TEXT UNIQUE,
+  highlight_path  TEXT UNIQUE,
+  dynamic_moves   INTEGER,
+  longest_reach_px DOUBLE PRECISION,
+  hang_time_seconds DOUBLE PRECISION,
+  idle_seconds    DOUBLE PRECISION,
+  posted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   config_hash     TEXT NOT NULL,
   UNIQUE (video_id, start_frame, end_frame)
 );
+
+-- Additive migrations for upgrading an existing schema (Postgres >= 9.6).
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS highlight_path    TEXT UNIQUE;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS dynamic_moves     INTEGER;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS longest_reach_px  DOUBLE PRECISION;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS hang_time_seconds DOUBLE PRECISION;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS idle_seconds      DOUBLE PRECISION;
+ALTER TABLE attempt ADD COLUMN IF NOT EXISTS posted_at         TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_attempt_posted_at ON attempt(posted_at DESC);
 
 CREATE TABLE IF NOT EXISTS hold (
   id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -194,18 +209,26 @@ def upsert_attempt(conn: psycopg.Connection, a: Attempt) -> int:
                             start_frame, end_frame, time_seconds,
                             smoothness_raw, smoothness_pct,
                             send, attempts_count, route_source,
-                            overlay_path, config_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            overlay_path, highlight_path,
+                            dynamic_moves, longest_reach_px,
+                            hang_time_seconds, idle_seconds,
+                            config_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(video_id, start_frame, end_frame) DO UPDATE SET
-            climber_id     = EXCLUDED.climber_id,
-            route_id       = EXCLUDED.route_id,
-            time_seconds   = EXCLUDED.time_seconds,
-            smoothness_raw = EXCLUDED.smoothness_raw,
-            smoothness_pct = EXCLUDED.smoothness_pct,
-            send           = EXCLUDED.send,
-            attempts_count = EXCLUDED.attempts_count,
-            overlay_path   = EXCLUDED.overlay_path,
-            config_hash    = EXCLUDED.config_hash
+            climber_id        = EXCLUDED.climber_id,
+            route_id          = EXCLUDED.route_id,
+            time_seconds      = EXCLUDED.time_seconds,
+            smoothness_raw    = EXCLUDED.smoothness_raw,
+            smoothness_pct    = EXCLUDED.smoothness_pct,
+            send              = EXCLUDED.send,
+            attempts_count    = EXCLUDED.attempts_count,
+            overlay_path      = EXCLUDED.overlay_path,
+            highlight_path    = EXCLUDED.highlight_path,
+            dynamic_moves     = EXCLUDED.dynamic_moves,
+            longest_reach_px  = EXCLUDED.longest_reach_px,
+            hang_time_seconds = EXCLUDED.hang_time_seconds,
+            idle_seconds      = EXCLUDED.idle_seconds,
+            config_hash       = EXCLUDED.config_hash
         RETURNING id
         """,
         (
@@ -221,6 +244,11 @@ def upsert_attempt(conn: psycopg.Connection, a: Attempt) -> int:
             a.attempts_count,
             str(a.route_source),
             a.overlay_path,
+            a.highlight_path,
+            a.dynamic_moves,
+            a.longest_reach_px,
+            a.hang_time_seconds,
+            a.idle_seconds,
             a.config_hash,
         ),
     )

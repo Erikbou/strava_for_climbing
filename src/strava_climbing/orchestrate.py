@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import manifests
+from . import body_stats, highlight, manifests
 from .boundary_detection import find_attempts
 from .config import paths as P
 from .config import runtime as R
@@ -153,6 +153,8 @@ def _process_one(
         metrics = compute_metrics(
             bounds, track.com_xy, fps=fps, attempts_count=len(attempts)
         )
+        stats = body_stats.compute(bounds, track.xy, track.com_xy, fps=fps)
+
         overlay_path = P.OVERLAYS_DIR / f"{video_id}_a{i}.mp4"
         try:
             render_overlay(
@@ -168,6 +170,17 @@ def _process_one(
         except Exception:
             log.exception("overlay render failed for video %s attempt %s", video_id, i)
             overlay_path = None
+
+        highlight_path: Path | None = P.OVERLAYS_DIR.parent / "highlights" / f"{video_id}_a{i}.mp4"
+        try:
+            start_s, dur_s = highlight.pick_highlight_window(bounds, track.com_xy, fps=fps)
+            highlight.render_highlight(
+                normalized, highlight_path,
+                start_seconds=start_s, duration_seconds=dur_s,
+            )
+        except Exception:
+            log.exception("highlight render failed for video %s attempt %s", video_id, i)
+            highlight_path = None
 
         upsert_attempt(
             conn,
@@ -185,6 +198,11 @@ def _process_one(
                 attempts_count=metrics.attempts_count,
                 route_source=RouteSource.MANUAL if route_id else RouteSource.UNASSIGNED,
                 overlay_path=str(overlay_path) if overlay_path else None,
+                highlight_path=str(highlight_path) if highlight_path else None,
+                dynamic_moves=stats.dynamic_moves,
+                longest_reach_px=stats.longest_reach_px,
+                hang_time_seconds=stats.hang_time_seconds,
+                idle_seconds=stats.idle_seconds,
                 config_hash=cfg_hash,
             ),
         )
