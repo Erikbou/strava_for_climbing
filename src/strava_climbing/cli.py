@@ -12,7 +12,6 @@ import typer
 from . import ingest as ingest_mod
 from . import orchestrate
 from .config import paths as P
-from .config import runtime as R
 
 app = typer.Typer(
     add_completion=False,
@@ -53,6 +52,8 @@ def process(
     force: bool = typer.Option(False, "--force", help="Re-process even if manifest matches."),
 ) -> None:
     """Run pose -> boundaries -> metrics -> overlay over all successfully ingested videos."""
+    from .config import runtime as R
+
     stats = orchestrate.process_all(force=force)
     typer.echo(f"process done: {stats}")
     if not R.stage2_enabled():
@@ -63,13 +64,12 @@ def process(
 def demo(
     port: int = typer.Option(8501, "--port"),
 ) -> None:
-    """Launch the Streamlit dashboard. Sets STRAVA_CLIMBING_MODE=demo if a frozen DB exists."""
+    """Launch the Streamlit dashboard. Sets STRAVA_CLIMBING_MODE=demo for read-only UX."""
     import os
 
     env = os.environ.copy()
-    if P.DEMO_DB_PATH.exists():
-        env["STRAVA_CLIMBING_MODE"] = "demo"
-        typer.echo(f"demo mode: reading {P.DEMO_DB_PATH}")
+    env["STRAVA_CLIMBING_MODE"] = "demo"
+    typer.echo("demo mode: read-only against Supabase")
     app_file = P.REPO_ROOT / "apps" / "streamlit" / "main.py"
     cmd = [sys.executable, "-m", "streamlit", "run", str(app_file), "--server.port", str(port)]
     subprocess.run(cmd, env=env, check=False)
@@ -90,12 +90,15 @@ def verify_demo() -> None:
 
 @app.command("init-db")
 def init_db_cmd() -> None:
-    """Create the SQLite database and schema. Idempotent; ingest also calls this."""
-    from .db import init_db
-
-    P.ensure_dirs()
-    init_db(P.DB_PATH)
-    typer.echo(f"db ready at {P.DB_PATH}")
+    """Print instructions for applying the Supabase schema migration."""
+    migration = P.REPO_ROOT / "supabase" / "migrations" / "0001_initial_schema.sql"
+    typer.echo(
+        "Supabase schema is applied out-of-band. Paste this file into the "
+        "Supabase Dashboard → SQL Editor and run it:\n"
+        f"  {migration}\n"
+        "Or, if you use the Supabase CLI:\n"
+        "  supabase db push"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

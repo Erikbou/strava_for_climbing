@@ -171,28 +171,24 @@ def _write_report(entries: list[IngestReportEntry]) -> None:
     P.INGEST_REPORT_PATH.write_text(json.dumps(payload, indent=2))
 
 
-def ingest_directory(raw_dir: Path | None = None, *, db_path: Path | None = None) -> dict:
+def ingest_directory(raw_dir: Path | None = None) -> dict:
     """Top-level orchestration. Idempotent on source-file SHA-256."""
     raw = raw_dir or P.RAW_DIR
-    db = db_path or P.DB_PATH
     P.ensure_dirs()
 
-    from .db import init_db  # local import to avoid circulars when tests import ingest
-
-    init_db(db)
+    client = connect()
 
     use_vt = _detect_videotoolbox()
     entries: list[IngestReportEntry] = []
     stats = {"seen": 0, "ok": 0, "skipped": 0, "rejected": 0, "errored": 0}
 
-    with connect(db) as conn:
-        for src in sorted(raw.iterdir()):
-            if not src.is_file() or src.suffix.lower() not in VIDEO_EXTENSIONS:
-                continue
-            stats["seen"] += 1
-            entry = _ingest_one(conn, src, use_vt)
-            entries.append(entry)
-            stats[_status_bucket(entry.status)] += 1
+    for src in sorted(raw.iterdir()):
+        if not src.is_file() or src.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        stats["seen"] += 1
+        entry = _ingest_one(client, src, use_vt)
+        entries.append(entry)
+        stats[_status_bucket(entry.status)] += 1
 
     _write_report(entries)
     return stats
@@ -207,7 +203,7 @@ def _status_bucket(status: str) -> str:
     }.get(status, "errored")
 
 
-def _ingest_one(conn, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
+def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
     now = datetime.now(UTC)
     try:
         sha = sha256_file(src)
@@ -219,7 +215,7 @@ def _ingest_one(conn, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
             reason=f"sha256 failed: {e}",
         )
 
-    existing = get_video_by_sha(conn, sha)
+    existing = get_video_by_sha(client, sha)
     if existing is not None and existing.ingest_status == "ok":
         return IngestReportEntry(
             source_path=str(src),
@@ -257,7 +253,7 @@ def _ingest_one(conn, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
 
     norm_meta = probe_video(dst)
     upsert_video(
-        conn,
+        client,
         Video(
             id=None,
             source_path=str(src),

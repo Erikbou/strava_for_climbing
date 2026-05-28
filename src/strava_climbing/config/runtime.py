@@ -6,7 +6,7 @@ import os
 
 
 def is_demo_mode() -> bool:
-    """Demo mode opens a frozen DB read-only and disables uploads."""
+    """Demo mode treats the Supabase project as read-only and disables uploads."""
     return os.environ.get("STRAVA_CLIMBING_MODE") == "demo"
 
 

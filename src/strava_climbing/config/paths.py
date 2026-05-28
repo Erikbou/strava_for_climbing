@@ -1,7 +1,9 @@
 """Filesystem layout. Everything is relative to ``DATA_ROOT``.
 
 Override with the ``STRAVA_CLIMBING_DATA_ROOT`` env var so the demo can run
-out of a frozen ``data/climbing.sqlite.demo`` snapshot in a different folder.
+out of a different folder. The structured database lives in Supabase, not on
+disk — only derived media (normalized videos, pose caches, overlay clips,
+sample frames) is kept locally.
 """
 
 from __future__ import annotations
@@ -19,8 +21,6 @@ CACHE_DIR = DATA_ROOT / "cache"
 MANIFESTS_DIR = DATA_ROOT / "manifests"
 POSE_CACHE_DIR = CACHE_DIR / "pose"
 
-DB_PATH = DATA_ROOT / "climbing.sqlite"
-DEMO_DB_PATH = DATA_ROOT / "climbing.sqlite.demo"
 INGEST_REPORT_PATH = DATA_ROOT / "ingest_report.json"
 
 MODELS_DIR = REPO_ROOT / "models"

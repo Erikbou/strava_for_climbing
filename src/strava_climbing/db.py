@@ -1,268 +1,144 @@
-"""SQLite layer: connection factory, schema DDL, and thin repositories.
+"""Supabase client + thin repositories.
 
-Every connection MUST go through `connect()` so that foreign keys, WAL, and
-busy timeout are set. `init_db()` is idempotent. Read-only connections use
-URI mode so the demo path can be opened with mode=ro and skip lock contention.
+The pipeline used to talk to a local SQLite file via ``sqlite3.connect()``;
+it now talks to a Supabase Postgres project via PostgREST. Schema DDL is
+applied separately — see ``supabase/migrations/0001_initial_schema.sql``.
+
+Credentials are read from the package-local ``.env`` (or process env). The
+client is cached so callers can keep using ``connect()`` without paying
+TCP setup on every call.
 """
 
 from __future__ import annotations
 
-import json
-import sqlite3
+import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from supabase import Client, create_client
 
 from .provenance import RouteSource
 from .schema import Attempt, Route, Video
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS climber (
-  id      INTEGER PRIMARY KEY,
-  name    TEXT NOT NULL,
-  aliases TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(aliases)),
-  UNIQUE (name COLLATE NOCASE)
-);
 
-CREATE TABLE IF NOT EXISTS video (
-  id               INTEGER PRIMARY KEY,
-  source_path      TEXT NOT NULL,
-  normalized_path  TEXT NOT NULL UNIQUE,
-  source_sha256    TEXT NOT NULL UNIQUE,
-  duration_seconds REAL NOT NULL CHECK (duration_seconds > 0),
-  width            INTEGER NOT NULL CHECK (width  > 0),
-  height           INTEGER NOT NULL CHECK (height > 0),
-  fps              REAL    NOT NULL CHECK (fps    > 0),
-  ingest_status    TEXT NOT NULL CHECK (ingest_status IN ('pending','ok','rejected','error')),
-  ingest_report    TEXT    CHECK (ingest_report IS NULL OR json_valid(ingest_report))
-);
+def _load_dotenv_once() -> None:
+    """Populate os.environ from src/strava_climbing/.env if present.
 
-CREATE TABLE IF NOT EXISTS wall (
-  id                INTEGER PRIMARY KEY,
-  gym_name          TEXT NOT NULL,
-  sample_frame_path TEXT,
-  dinov3_embedding  BLOB
-);
-
-CREATE TABLE IF NOT EXISTS route (
-  id                 INTEGER PRIMARY KEY,
-  wall_id            INTEGER NOT NULL REFERENCES wall(id) ON DELETE RESTRICT,
-  color              TEXT,
-  sample_frame_path  TEXT,
-  hold_layout        TEXT CHECK (hold_layout IS NULL OR json_valid(hold_layout)),
-  layout_embedding   BLOB,
-  origin             TEXT NOT NULL CHECK (origin IN ('manual','auto','unassigned')),
-  cluster_confidence REAL CHECK (cluster_confidence IS NULL
-                                 OR cluster_confidence BETWEEN 0 AND 1)
-);
-
-CREATE TABLE IF NOT EXISTS attempt (
-  id              INTEGER PRIMARY KEY,
-  climber_id      INTEGER REFERENCES climber(id) ON DELETE SET NULL,
-  route_id        INTEGER REFERENCES route(id)   ON DELETE SET NULL,
-  video_id        INTEGER NOT NULL REFERENCES video(id) ON DELETE CASCADE,
-  start_frame     INTEGER NOT NULL CHECK (start_frame >= 0),
-  end_frame       INTEGER NOT NULL CHECK (end_frame > start_frame),
-  time_seconds    REAL    NOT NULL CHECK (time_seconds > 0),
-  smoothness_raw  REAL,
-  smoothness_pct  REAL CHECK (smoothness_pct IS NULL OR smoothness_pct BETWEEN 0 AND 100),
-  send            INTEGER NOT NULL CHECK (send IN (0,1)),
-  attempts_count  INTEGER NOT NULL CHECK (attempts_count >= 1),
-  route_source    TEXT NOT NULL CHECK (route_source IN ('manual','auto','unassigned')),
-  overlay_path    TEXT UNIQUE,
-  config_hash     TEXT NOT NULL,
-  UNIQUE (video_id, start_frame, end_frame)
-);
-
-CREATE TABLE IF NOT EXISTS hold (
-  id        INTEGER PRIMARY KEY,
-  wall_id   INTEGER NOT NULL REFERENCES wall(id)  ON DELETE CASCADE,
-  route_id  INTEGER          REFERENCES route(id) ON DELETE SET NULL,
-  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
-  color_hsv TEXT CHECK (color_hsv IS NULL OR json_valid(color_hsv)),
-  CHECK (x BETWEEN 0 AND 1 AND y BETWEEN 0 AND 1 AND w > 0 AND h > 0)
-);
-
-CREATE INDEX IF NOT EXISTS idx_attempt_route_send_time
-  ON attempt(route_id, send DESC, time_seconds ASC);
-CREATE INDEX IF NOT EXISTS idx_attempt_climber ON attempt(climber_id);
-CREATE INDEX IF NOT EXISTS idx_attempt_video   ON attempt(video_id);
-CREATE INDEX IF NOT EXISTS idx_route_origin    ON route(origin);
-CREATE INDEX IF NOT EXISTS idx_route_wall      ON route(wall_id);
-CREATE INDEX IF NOT EXISTS idx_hold_wall_route ON hold(wall_id, route_id);
-
-CREATE TRIGGER IF NOT EXISTS trg_attempt_protect_manual
-BEFORE UPDATE OF route_id, route_source ON attempt
-FOR EACH ROW WHEN OLD.route_source = 'manual' AND NEW.route_source != 'manual'
-BEGIN
-  SELECT RAISE(ABORT, 'cannot overwrite manual route assignment');
-END;
-"""
+    Kept dependency-free — full python-dotenv is overkill for two keys.
+    """
+    candidates = [
+        Path(__file__).resolve().parent / ".env",
+        Path.cwd() / ".env",
+    ]
+    for p in candidates:
+        if not p.exists():
+            continue
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-def connect(path: str | Path, *, read_only: bool = False) -> sqlite3.Connection:
-    """Open a connection with required pragmas. Always use this — never sqlite3.connect()."""
-    p = str(path)
-    uri = f"file:{p}?mode=ro" if read_only else f"file:{p}"
-    conn = sqlite3.connect(uri, uri=True, isolation_level=None)  # autocommit; use BEGIN explicitly
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    fk_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
-    assert fk_on == 1, "foreign_keys pragma did not stick — check SQLite build"
-    return conn
+_load_dotenv_once()
 
 
-def init_db(path: str | Path) -> None:
-    """Create tables/indexes/triggers if missing. Idempotent."""
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with connect(path) as conn:
-        conn.executescript(SCHEMA_SQL)
+def _resolve_credentials() -> tuple[str, str]:
+    url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+    key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_KEY")
+        or os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+        or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    )
+    if not url or not key:
+        raise RuntimeError(
+            "Missing Supabase credentials. Set NEXT_PUBLIC_SUPABASE_URL and "
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (or SUPABASE_SERVICE_ROLE_KEY "
+            "for write access) in src/strava_climbing/.env"
+        )
+    return url, key
+
+
+@lru_cache(maxsize=1)
+def _cached_client() -> Client:
+    url, key = _resolve_credentials()
+    return create_client(url, key)
+
+
+def connect(*_args: Any, read_only: bool = False, **_kwargs: Any) -> Client:
+    """Return the cached Supabase client.
+
+    The ``*_args`` / ``**_kwargs`` exist purely so this remains a drop-in for
+    the old ``connect(path)`` signature called from older entry points.
+    ``read_only`` is currently advisory — write protection lives in Postgres
+    RLS rather than the client.
+    """
+    del read_only  # noted; no separate read-only client at the moment
+    return _cached_client()
+
+
+def init_db(*_args: Any, **_kwargs: Any) -> None:
+    """No-op for Supabase.
+
+    Schema is applied out-of-band via ``supabase/migrations/0001_initial_schema.sql``
+    (run it in the Supabase SQL editor or via ``supabase db push``). Kept as a
+    function so existing call sites in ``ingest.py`` and ``orchestrate.py`` need
+    no changes.
+    """
+    return None
 
 
 # --- Repository helpers (thin) ----------------------------------------------
 
 
-def upsert_climber(conn: sqlite3.Connection, name: str, aliases: list[str] | None = None) -> int:
-    aliases_json = json.dumps(aliases or [])
-    cur = conn.execute(
-        "INSERT INTO climber(name, aliases) VALUES (?, ?) "
-        "ON CONFLICT(name) DO UPDATE SET aliases = excluded.aliases "
-        "RETURNING id",
-        (name, aliases_json),
+def upsert_climber(client: Client, name: str, aliases: list[str] | None = None) -> int:
+    res = (
+        client.table("climber")
+        .upsert(
+            {"name": name, "aliases": aliases or []},
+            on_conflict="name",
+        )
+        .execute()
     )
-    return cur.fetchone()[0]
+    return res.data[0]["id"]
 
 
-def upsert_video(conn: sqlite3.Connection, v: Video) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO video(source_path, normalized_path, source_sha256,
-                          duration_seconds, width, height, fps,
-                          ingest_status, ingest_report)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_sha256) DO UPDATE SET
-            normalized_path = excluded.normalized_path,
-            ingest_status   = excluded.ingest_status,
-            ingest_report   = excluded.ingest_report
-        RETURNING id
-        """,
-        (
-            v.source_path,
-            v.normalized_path,
-            v.source_sha256,
-            v.duration_seconds,
-            v.width,
-            v.height,
-            v.fps,
-            v.ingest_status,
-            json.dumps(v.ingest_report) if v.ingest_report else None,
-        ),
+def upsert_video(client: Client, v: Video) -> int:
+    res = (
+        client.table("video")
+        .upsert(
+            {
+                "source_path": v.source_path,
+                "normalized_path": v.normalized_path,
+                "source_sha256": v.source_sha256,
+                "duration_seconds": v.duration_seconds,
+                "width": v.width,
+                "height": v.height,
+                "fps": v.fps,
+                "ingest_status": v.ingest_status,
+                "ingest_report": v.ingest_report,
+            },
+            on_conflict="source_sha256",
+        )
+        .execute()
     )
-    return cur.fetchone()[0]
+    return res.data[0]["id"]
 
 
-def get_video_by_sha(conn: sqlite3.Connection, sha256: str) -> Video | None:
-    row = conn.execute("SELECT * FROM video WHERE source_sha256 = ?", (sha256,)).fetchone()
-    return _row_to_video(row) if row else None
-
-
-def upsert_attempt(conn: sqlite3.Connection, a: Attempt) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO attempt(climber_id, route_id, video_id,
-                            start_frame, end_frame, time_seconds,
-                            smoothness_raw, smoothness_pct,
-                            send, attempts_count, route_source,
-                            overlay_path, config_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(video_id, start_frame, end_frame) DO UPDATE SET
-            climber_id     = excluded.climber_id,
-            route_id       = excluded.route_id,
-            time_seconds   = excluded.time_seconds,
-            smoothness_raw = excluded.smoothness_raw,
-            smoothness_pct = excluded.smoothness_pct,
-            send           = excluded.send,
-            attempts_count = excluded.attempts_count,
-            overlay_path   = excluded.overlay_path,
-            config_hash    = excluded.config_hash
-        RETURNING id
-        """,
-        (
-            a.climber_id,
-            a.route_id,
-            a.video_id,
-            a.start_frame,
-            a.end_frame,
-            a.time_seconds,
-            a.smoothness_raw,
-            a.smoothness_pct,
-            int(a.send),
-            a.attempts_count,
-            str(a.route_source),
-            a.overlay_path,
-            a.config_hash,
-        ),
+def get_video_by_sha(client: Client, sha256: str) -> Video | None:
+    res = (
+        client.table("video")
+        .select("*")
+        .eq("source_sha256", sha256)
+        .limit(1)
+        .execute()
     )
-    return cur.fetchone()[0]
-
-
-def upsert_route(conn: sqlite3.Connection, r: Route) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO route(wall_id, color, sample_frame_path, hold_layout,
-                          layout_embedding, origin, cluster_confidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-        """,
-        (
-            r.wall_id,
-            r.color,
-            r.sample_frame_path,
-            json.dumps(r.hold_layout) if r.hold_layout else None,
-            r.layout_embedding,
-            str(r.origin),
-            r.cluster_confidence,
-        ),
-    )
-    return cur.fetchone()[0]
-
-
-def leaderboard(conn: sqlite3.Connection, route_id: int) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT a.id            AS attempt_id,
-               c.name          AS climber_name,
-               a.time_seconds  AS time_seconds,
-               a.smoothness_pct AS smoothness_pct,
-               a.send          AS send,
-               a.overlay_path  AS overlay_path,
-               a.attempts_count AS attempts_count
-          FROM attempt a
-          LEFT JOIN climber c ON c.id = a.climber_id
-         WHERE a.route_id = ?
-         ORDER BY a.send DESC, a.time_seconds ASC
-        """,
-        (route_id,),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def list_routes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT r.id, r.color, r.origin, r.sample_frame_path,
-               COUNT(a.id) AS attempt_count
-          FROM route r
-          LEFT JOIN attempt a ON a.route_id = r.id
-         GROUP BY r.id
-         ORDER BY attempt_count DESC
-        """
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _row_to_video(row: sqlite3.Row) -> Video:
+    if not res.data:
+        return None
+    row = res.data[0]
     return Video(
         id=row["id"],
         source_path=row["source_path"],
@@ -273,18 +149,247 @@ def _row_to_video(row: sqlite3.Row) -> Video:
         height=row["height"],
         fps=row["fps"],
         ingest_status=row["ingest_status"],
-        ingest_report=json.loads(row["ingest_report"]) if row["ingest_report"] else None,
+        ingest_report=row["ingest_report"],
     )
 
 
+def upsert_attempt(client: Client, a: Attempt) -> int:
+    res = (
+        client.table("attempt")
+        .upsert(
+            {
+                "climber_id": a.climber_id,
+                "route_id": a.route_id,
+                "video_id": a.video_id,
+                "start_frame": a.start_frame,
+                "end_frame": a.end_frame,
+                "time_seconds": a.time_seconds,
+                "smoothness_raw": a.smoothness_raw,
+                "smoothness_pct": a.smoothness_pct,
+                "send": bool(a.send),
+                "attempts_count": a.attempts_count,
+                "route_source": str(a.route_source),
+                "overlay_path": a.overlay_path,
+                "config_hash": a.config_hash,
+            },
+            on_conflict="video_id,start_frame,end_frame",
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+def upsert_route(client: Client, r: Route) -> int:
+    res = (
+        client.table("route")
+        .insert(
+            {
+                "wall_id": r.wall_id,
+                "color": r.color,
+                "sample_frame_path": r.sample_frame_path,
+                "hold_layout": r.hold_layout,
+                "origin": str(r.origin),
+                "cluster_confidence": r.cluster_confidence,
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+def update_attempt_smoothness_pct(
+    client: Client, attempt_id: int, smoothness_pct: float | None
+) -> None:
+    client.table("attempt").update({"smoothness_pct": smoothness_pct}).eq(
+        "id", attempt_id
+    ).execute()
+
+
+def find_or_create_wall(client: Client, gym_name: str) -> int:
+    existing = (
+        client.table("wall")
+        .select("id")
+        .eq("gym_name", gym_name)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]["id"]
+    res = client.table("wall").insert({"gym_name": gym_name}).execute()
+    return res.data[0]["id"]
+
+
+def find_route(client: Client, wall_id: int, color: str | None) -> int | None:
+    q = client.table("route").select("id").eq("wall_id", wall_id)
+    q = q.is_("color", "null") if color is None else q.eq("color", color)
+    res = q.limit(1).execute()
+    return res.data[0]["id"] if res.data else None
+
+
+def list_attempts_for_video(client: Client, video_id: int) -> list[dict[str, Any]]:
+    res = (
+        client.table("attempt")
+        .select("id, smoothness_raw, route_id")
+        .eq("video_id", video_id)
+        .execute()
+    )
+    return res.data
+
+
+def list_ok_videos(client: Client) -> list[dict[str, Any]]:
+    res = (
+        client.table("video")
+        .select("id, source_path, normalized_path, height, fps")
+        .eq("ingest_status", "ok")
+        .execute()
+    )
+    return res.data
+
+
+def attempts_for_route(client: Client, route_id: int) -> list[dict[str, Any]]:
+    res = (
+        client.table("attempt")
+        .select("id, smoothness_raw")
+        .eq("route_id", route_id)
+        .not_.is_("smoothness_raw", "null")
+        .order("id")
+        .execute()
+    )
+    return res.data
+
+
+def distinct_route_ids_with_attempts(client: Client) -> list[int]:
+    res = (
+        client.table("attempt")
+        .select("route_id")
+        .not_.is_("route_id", "null")
+        .execute()
+    )
+    return sorted({row["route_id"] for row in res.data})
+
+
+def leaderboard(client: Client, route_id: int) -> list[dict[str, Any]]:
+    res = (
+        client.table("attempt")
+        .select(
+            "id, time_seconds, smoothness_pct, send, overlay_path, attempts_count, "
+            "climber(name)"
+        )
+        .eq("route_id", route_id)
+        .order("send", desc=True)
+        .order("time_seconds", desc=False)
+        .execute()
+    )
+    out: list[dict[str, Any]] = []
+    for r in res.data:
+        climber = r.get("climber")
+        out.append(
+            {
+                "attempt_id": r["id"],
+                "climber_name": climber["name"] if climber else None,
+                "time_seconds": r["time_seconds"],
+                "smoothness_pct": r["smoothness_pct"],
+                "send": 1 if r["send"] else 0,
+                "overlay_path": r["overlay_path"],
+                "attempts_count": r["attempts_count"],
+            }
+        )
+    return out
+
+
+def list_routes(client: Client) -> list[dict[str, Any]]:
+    res = (
+        client.table("route_with_attempt_counts")
+        .select("id, color, origin, sample_frame_path, attempt_count")
+        .order("attempt_count", desc=True)
+        .execute()
+    )
+    return res.data
+
+
+def overlay_paths_in_use(client: Client) -> list[str]:
+    res = (
+        client.table("attempt")
+        .select("overlay_path")
+        .not_.is_("overlay_path", "null")
+        .execute()
+    )
+    return [row["overlay_path"] for row in res.data]
+
+
+def route_sample_frame_paths(client: Client) -> list[str]:
+    res = (
+        client.table("route")
+        .select("sample_frame_path")
+        .not_.is_("sample_frame_path", "null")
+        .execute()
+    )
+    return [row["sample_frame_path"] for row in res.data]
+
+
+def get_attempt_detail(client: Client, attempt_id: int) -> dict[str, Any] | None:
+    res = (
+        client.table("attempt")
+        .select(
+            "*, "
+            "climber(name), "
+            "route(color, wall(gym_name)), "
+            "video(normalized_path)"
+        )
+        .eq("id", attempt_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    climber = row.pop("climber", None)
+    route = row.pop("route", None)
+    video = row.pop("video", None)
+    flat = dict(row)
+    flat["climber_name"] = climber["name"] if climber else None
+    flat["route_color"] = route["color"] if route else None
+    flat["gym_name"] = route["wall"]["gym_name"] if route and route.get("wall") else None
+    flat["normalized_path"] = video["normalized_path"] if video else None
+    return flat
+
+
+def get_route_with_wall(client: Client, route_id: int) -> dict[str, Any] | None:
+    res = (
+        client.table("route")
+        .select("id, color, origin, sample_frame_path, cluster_confidence, "
+                "wall_id, wall(gym_name)")
+        .eq("id", route_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    wall = row.pop("wall", None)
+    flat = dict(row)
+    flat["gym_name"] = wall["gym_name"] if wall else None
+    return flat
+
+
 __all__ = [
-    "SCHEMA_SQL",
     "RouteSource",
+    "attempts_for_route",
     "connect",
+    "distinct_route_ids_with_attempts",
+    "find_or_create_wall",
+    "find_route",
+    "get_attempt_detail",
+    "get_route_with_wall",
     "get_video_by_sha",
     "init_db",
     "leaderboard",
+    "list_attempts_for_video",
+    "list_ok_videos",
     "list_routes",
+    "overlay_paths_in_use",
+    "route_sample_frame_paths",
+    "update_attempt_smoothness_pct",
     "upsert_attempt",
     "upsert_climber",
     "upsert_route",

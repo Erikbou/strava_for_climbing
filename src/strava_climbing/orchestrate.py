@@ -16,8 +16,15 @@ from .boundary_detection import find_attempts
 from .config import paths as P
 from .config import runtime as R
 from .db import (
+    attempts_for_route,
     connect,
-    init_db,
+    distinct_route_ids_with_attempts,
+    find_or_create_wall,
+    find_route,
+    list_ok_videos,
+    overlay_paths_in_use,
+    route_sample_frame_paths,
+    update_attempt_smoothness_pct,
     upsert_attempt,
     upsert_climber,
     upsert_route,
@@ -59,49 +66,41 @@ def read_curated_csv(path: Path) -> dict[str, CuratedRow]:
     return out
 
 
-def process_all(*, db_path: Path | None = None, force: bool = False) -> dict:
+def process_all(*, force: bool = False) -> dict:
     """Run the full Stage-1 pipeline across all successfully ingested videos."""
     P.ensure_dirs()
-    db = db_path or P.DB_PATH
-    init_db(db)
+    client = connect()
 
     curated = read_curated_csv(P.DATA_ROOT / "curated_subset.csv")
     cfg_hash = current_config_hash()
     stats = {"videos": 0, "attempts": 0, "skipped": 0, "errored": 0}
 
-    with connect(db) as conn:
-        videos = conn.execute(
-            "SELECT id, source_path, normalized_path, height, fps "
-            "FROM video WHERE ingest_status = 'ok'"
-        ).fetchall()
-
-        for v in videos:
-            stats["videos"] += 1
-            try:
-                added = _process_one(
-                    conn, dict(v), curated=curated, cfg_hash=cfg_hash, force=force
+    videos = list_ok_videos(client)
+    for v in videos:
+        stats["videos"] += 1
+        try:
+            added = _process_one(client, v, curated=curated, cfg_hash=cfg_hash, force=force)
+            stats["attempts"] += added
+        except Exception as e:
+            log.exception("processing failed for video %s", v["id"])
+            stats["errored"] += 1
+            manifests.write(
+                manifests.Manifest(
+                    stage="pose",
+                    video_id=v["id"],
+                    status="error",
+                    inputs_hash=cfg_hash,
+                    started_at=manifests.stamp(),
+                    finished_at=manifests.stamp(),
+                    error=str(e),
                 )
-                stats["attempts"] += added
-            except Exception as e:
-                log.exception("processing failed for video %s", v["id"])
-                stats["errored"] += 1
-                manifests.write(
-                    manifests.Manifest(
-                        stage="pose",
-                        video_id=v["id"],
-                        status="error",
-                        inputs_hash=cfg_hash,
-                        started_at=manifests.stamp(),
-                        finished_at=manifests.stamp(),
-                        error=str(e),
-                    )
-                )
+            )
 
-        _finalize_smoothness_percentiles(conn, cfg_hash)
+    _finalize_smoothness_percentiles(client, cfg_hash)
 
     if R.stage2_enabled():
         try:
-            run_stage2(db_path=db)
+            run_stage2()
         except ImportError as e:
             log.warning("stage 2 disabled (missing deps): %s", e)
         except Exception:
@@ -111,7 +110,7 @@ def process_all(*, db_path: Path | None = None, force: bool = False) -> dict:
 
 
 def _process_one(
-    conn,
+    client,
     video: dict,
     *,
     curated: dict[str, CuratedRow],
@@ -146,8 +145,8 @@ def _process_one(
     # Climber + route resolution from the curated CSV (filename match).
     source_name = Path(video["source_path"]).name
     crow = curated.get(source_name)
-    climber_id = upsert_climber(conn, crow.climber_name) if crow else None
-    route_id = _resolve_route(conn, crow) if crow else None
+    climber_id = upsert_climber(client, crow.climber_name) if crow else None
+    route_id = _resolve_route(client, crow) if crow else None
 
     added = 0
     for i, bounds in enumerate(attempts):
@@ -171,7 +170,7 @@ def _process_one(
             overlay_path = None
 
         upsert_attempt(
-            conn,
+            client,
             Attempt(
                 id=None,
                 video_id=video_id,
@@ -229,25 +228,14 @@ def _run_pose_stage(video_id: int, normalized: Path, cache_path: Path, cfg_hash:
     )
 
 
-def _resolve_route(conn, crow: CuratedRow) -> int:
+def _resolve_route(client, crow: CuratedRow) -> int:
     """Find-or-create the (wall, route) pair for a curated row."""
-    wall_row = conn.execute(
-        "SELECT id FROM wall WHERE gym_name = ?", (crow.gym,)
-    ).fetchone()
-    if wall_row is None:
-        wall_id = conn.execute(
-            "INSERT INTO wall(gym_name) VALUES (?) RETURNING id", (crow.gym,)
-        ).fetchone()[0]
-    else:
-        wall_id = wall_row["id"]
-
-    row = conn.execute(
-        "SELECT id FROM route WHERE wall_id = ? AND color IS ?", (wall_id, crow.color)
-    ).fetchone()
-    if row is not None:
-        return row["id"]
+    wall_id = find_or_create_wall(client, crow.gym)
+    existing = find_route(client, wall_id, crow.color)
+    if existing is not None:
+        return existing
     return upsert_route(
-        conn,
+        client,
         Route(
             id=None, wall_id=wall_id, color=crow.color,
             origin=RouteSource.MANUAL,
@@ -257,27 +245,18 @@ def _resolve_route(conn, crow: CuratedRow) -> int:
     )
 
 
-def _finalize_smoothness_percentiles(conn, cfg_hash: str) -> None:
+def _finalize_smoothness_percentiles(client, cfg_hash: str) -> None:
     """Recompute per-route smoothness percentiles using the frozen baseline strategy."""
-    routes = conn.execute("SELECT DISTINCT route_id FROM attempt WHERE route_id IS NOT NULL").fetchall()
-    for row in routes:
-        route_id = row["route_id"]
-        attempts = conn.execute(
-            "SELECT id, smoothness_raw FROM attempt "
-            "WHERE route_id = ? AND smoothness_raw IS NOT NULL "
-            "ORDER BY id ASC",
-            (route_id,),
-        ).fetchall()
+    del cfg_hash  # reserved for future invalidation; current strategy ignores it
+    for route_id in distinct_route_ids_with_attempts(client):
+        attempts = attempts_for_route(client, route_id)
         raws = [r["smoothness_raw"] for r in attempts]
         pcts = compute_route_percentiles(raws)
         for r, pct in zip(attempts, pcts, strict=True):
-            conn.execute(
-                "UPDATE attempt SET smoothness_pct = ? WHERE id = ?",
-                (pct, r["id"]),
-            )
+            update_attempt_smoothness_pct(client, r["id"], pct)
 
 
-def run_stage2(*, db_path: Path | None = None) -> None:
+def run_stage2() -> None:
     """Hold detection + route auto-matching. Lazy-imports the ``routes`` package
     so a missing transformers / torch install does not break Stage 1.
     """
@@ -285,21 +264,16 @@ def run_stage2(*, db_path: Path | None = None) -> None:
     raise NotImplementedError("Stage 2 not yet implemented")
 
 
-def verify_demo(*, db_path: Path | None = None) -> list[str]:
+def verify_demo() -> list[str]:
     """Walk the DB and stat() every referenced overlay path. Returns missing paths."""
-    db = db_path or P.DEMO_DB_PATH if (P.DEMO_DB_PATH).exists() else (db_path or P.DB_PATH)
+    client = connect(read_only=True)
     missing: list[str] = []
-    with connect(db, read_only=True) as conn:
-        for row in conn.execute(
-            "SELECT id, overlay_path FROM attempt WHERE overlay_path IS NOT NULL"
-        ).fetchall():
-            if not Path(row["overlay_path"]).exists():
-                missing.append(row["overlay_path"])
-        for row in conn.execute(
-            "SELECT id, sample_frame_path FROM route WHERE sample_frame_path IS NOT NULL"
-        ).fetchall():
-            if not Path(row["sample_frame_path"]).exists():
-                missing.append(row["sample_frame_path"])
+    for overlay in overlay_paths_in_use(client):
+        if not Path(overlay).exists():
+            missing.append(overlay)
+    for frame in route_sample_frame_paths(client):
+        if not Path(frame).exists():
+            missing.append(frame)
     return missing
 
 
