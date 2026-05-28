@@ -219,7 +219,11 @@ def _ingest_one(conn, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
         )
 
     existing = get_video_by_sha(conn, sha)
-    if existing is not None and existing.ingest_status == "ok":
+    if (
+        existing is not None
+        and existing.ingest_status == "ok"
+        and Path(existing.normalized_path).exists()
+    ):
         return IngestReportEntry(
             source_path=str(src),
             status="skipped",
@@ -227,6 +231,8 @@ def _ingest_one(conn, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
             source_sha256=sha,
             reason=f"already ingested as video.id={existing.id}",
         )
+    # SHA hit but normalized file is missing on disk — re-normalize below.
+    # upsert_video will UPDATE the row by source_sha256 conflict.
 
     try:
         meta = probe_video(src)
