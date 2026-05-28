@@ -175,35 +175,35 @@ export async function kudosCounts(
 
 export async function myKudos(
   attemptIds: ReadonlyArray<number>,
-  sessionId: string,
+  userId: number | null,
 ): Promise<Set<number>> {
-  if (attemptIds.length === 0 || !sessionId) return new Set();
+  if (attemptIds.length === 0 || !userId) return new Set();
   const rows = await q<{ attempt_id: number }>(
     `SELECT attempt_id FROM kudos
-      WHERE session_id = $1 AND attempt_id = ANY($2::int[])`,
-    [sessionId, attemptIds],
+      WHERE user_id = $1 AND attempt_id = ANY($2::int[])`,
+    [userId, attemptIds],
   );
   return new Set(rows.map((r) => r.attempt_id));
 }
 
 export async function toggleKudos(
   attemptId: number,
-  sessionId: string,
+  userId: number,
 ): Promise<number> {
   const existing = await qOne<{ ok: number }>(
-    `SELECT 1 AS ok FROM kudos WHERE attempt_id = $1 AND session_id = $2`,
-    [attemptId, sessionId],
+    `SELECT 1 AS ok FROM kudos WHERE attempt_id = $1 AND user_id = $2`,
+    [attemptId, userId],
   );
   if (existing) {
     await q(
-      `DELETE FROM kudos WHERE attempt_id = $1 AND session_id = $2`,
-      [attemptId, sessionId],
+      `DELETE FROM kudos WHERE attempt_id = $1 AND user_id = $2`,
+      [attemptId, userId],
     );
   } else {
     await q(
-      `INSERT INTO kudos(attempt_id, session_id) VALUES ($1, $2)
+      `INSERT INTO kudos(attempt_id, user_id) VALUES ($1, $2)
        ON CONFLICT DO NOTHING`,
-      [attemptId, sessionId],
+      [attemptId, userId],
     );
   }
   const row = await qOne<{ n: string }>(
@@ -211,4 +211,26 @@ export async function toggleKudos(
     [attemptId],
   );
   return Number(row?.n ?? 0);
+}
+
+/** Resolve "me" → the current user's climber id (auto-created on register).
+ *  Falls back to creating the climber row if it's missing (e.g. user signed
+ *  up before the auto-create hook landed). */
+export async function climberIdForUser(
+  userId: number,
+  displayName: string,
+): Promise<number | null> {
+  const row = await qOne<{ id: number }>(
+    `SELECT id FROM climber WHERE user_id = $1`,
+    [userId],
+  );
+  if (row) return row.id;
+  const inserted = await qOne<{ id: number }>(
+    `INSERT INTO climber(name, user_id) VALUES ($1, $2)
+     ON CONFLICT (LOWER(name)) DO UPDATE
+       SET user_id = COALESCE(climber.user_id, EXCLUDED.user_id)
+     RETURNING id`,
+    [displayName, userId],
+  );
+  return inserted?.id ?? null;
 }

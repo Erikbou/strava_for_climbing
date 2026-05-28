@@ -8,10 +8,10 @@ import { HeroVideo } from "@/components/HeroVideo";
 import { LikeButton } from "@/components/LikeButton";
 import { SendPill } from "@/components/Pill";
 import { StatTile } from "@/components/StatTile";
+import { currentUser } from "@/lib/auth";
 import { activityTitle, fmtInt, fmtNumber, formatAge } from "@/lib/format";
 import { DEFAULT_GYM, lookupGrade } from "@/lib/gym";
 import { feed, kudosCounts, myKudos, type FeedRow } from "@/lib/queries";
-import { sessionId } from "@/lib/session";
 import { videoSrcFor } from "@/lib/media";
 
 type Scope = "following" | "my gym" | "kc akalla" | "global";
@@ -30,12 +30,11 @@ export default async function FeedPage({ searchParams }: PageProps) {
     : "following") as Scope;
   const mode: Mode = sp.mode === "list" ? "list" : "cards";
 
-  const rows = await feed();
+  const [user, rows] = await Promise.all([currentUser(), feed()]);
   const ids = rows.map((r) => r.attempt_id);
-  const sid = await sessionId();
   const [counts, liked] = await Promise.all([
     kudosCounts(ids),
-    myKudos(ids, sid),
+    myKudos(ids, user?.id ?? null),
   ]);
 
   const scopeCounts = {
@@ -59,7 +58,7 @@ export default async function FeedPage({ searchParams }: PageProps) {
 
   return (
     <div className="app-shell">
-      <BrandBar active="feed" />
+      <BrandBar active="feed" user={user} />
 
       <div className="filter-row">
         {(

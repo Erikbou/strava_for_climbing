@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { Avatar } from "@/components/Avatar";
 import { BrandBar } from "@/components/BrandBar";
@@ -7,13 +7,19 @@ import { ColorChip } from "@/components/ColorChip";
 import { Pill, SendPill } from "@/components/Pill";
 import { SectionHead } from "@/components/SectionHead";
 import { StatTile } from "@/components/StatTile";
+import { currentUser } from "@/lib/auth";
 import { fmtInt, fmtNumber, formatAge } from "@/lib/format";
 import {
   COLOR_SWATCHES,
   DEFAULT_GYM,
   lookupGrade,
 } from "@/lib/gym";
-import { climber, climberAttempts, type ClimberAttemptRow } from "@/lib/queries";
+import {
+  climber,
+  climberAttempts,
+  climberIdForUser,
+  type ClimberAttemptRow,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +29,19 @@ interface PageProps {
 
 export default async function ClimberPage({ params }: PageProps) {
   const { climberId: raw } = await params;
-  const climberId = Number(raw);
-  if (!Number.isFinite(climberId) || climberId <= 0) notFound();
+  const user = await currentUser();
+
+  // /climber/me → resolve to the signed-in user's own climber id.
+  let climberId: number;
+  if (raw === "me") {
+    if (!user) redirect("/sign-in?next=/climber/me");
+    const own = await climberIdForUser(user.id, user.display_name);
+    if (!own) redirect("/climber");
+    redirect(`/climber/${own}`);
+  } else {
+    climberId = Number(raw);
+    if (!Number.isFinite(climberId) || climberId <= 0) notFound();
+  }
 
   const c = await climber(climberId);
   if (!c) notFound();
@@ -37,7 +54,7 @@ export default async function ClimberPage({ params }: PageProps) {
 
   return (
     <div className="app-shell">
-      <BrandBar active="climber" />
+      <BrandBar active="climber" user={user} />
       <Link href="/" className="back-link">
         ‹ back to feed
       </Link>

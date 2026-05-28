@@ -8,13 +8,17 @@ import { randomTitle } from "@/lib/titles";
 
 type TitleMode = "auto" | "random" | "custom";
 
-export function UploadForm() {
+interface UploadFormProps {
+  defaultClimber?: string;
+}
+
+export function UploadForm({ defaultClimber = "" }: UploadFormProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [titleMode, setTitleMode] = useState<TitleMode>("auto");
   const [randomName, setRandomName] = useState(() => randomTitle());
   const [customTitle, setCustomTitle] = useState("");
-  const [climber, setClimber] = useState("");
+  const [climber] = useState(defaultClimber);
   const [color, setColor] = useState(COLOR_KEYS[0]);
   const [gym, setGym] = useState(DEFAULT_GYM);
   const [file, setFile] = useState<File | null>(null);
@@ -171,12 +175,8 @@ export function UploadForm() {
       <div className="form-card">
         <div className="grid">
           <div className="field">
-            <label>climber name</label>
-            <input
-              placeholder="e.g. niklavs visockis"
-              value={climber}
-              onChange={(e) => setClimber(e.target.value)}
-            />
+            <label>climber</label>
+            <input value={climber} disabled aria-label="climber" />
           </div>
           <div className="field">
             <label>gym</label>
