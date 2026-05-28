@@ -14,16 +14,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 import subprocess
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import storage
 from .config import paths as P
+from .config import runtime as R
 from .config import thresholds as T
 from .db import connect, get_video_by_sha, upsert_video
 from .schema import IngestReportEntry, Video
+
+log = logging.getLogger("strava_climbing.ingest")
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 _CHUNK = 1 << 20  # 1 MiB
@@ -252,6 +257,14 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
         )
 
     norm_meta = probe_video(dst)
+
+    normalized_bucket_key, upload_error = _publish_normalized(dst, sha)
+    report: dict = {"source": meta, "normalized": norm_meta}
+    if normalized_bucket_key:
+        report["normalized_bucket_key"] = normalized_bucket_key
+    if upload_error:
+        report["normalized_upload_error"] = upload_error
+
     upsert_video(
         client,
         Video(
@@ -264,7 +277,8 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
             height=norm_meta["height"],
             fps=norm_meta["fps_avg"] or T.TARGET_FPS,
             ingest_status="ok",
-            ingest_report={"source": meta, "normalized": norm_meta},
+            ingest_report=report,
+            normalized_bucket_key=normalized_bucket_key,
         ),
     )
 
@@ -280,6 +294,30 @@ def _ingest_one(client, src: Path, use_videotoolbox: bool) -> IngestReportEntry:
 
 def have_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
+def _publish_normalized(dst: Path, sha: str) -> tuple[str | None, str | None]:
+    """Upload the normalized clip to the configured Supabase Storage bucket.
+
+    Returns ``(bucket_key, error)``. Either may be None:
+      - No bucket configured or demo mode → ``(None, None)``: local-only run.
+      - Upload succeeds → ``(key, None)``.
+      - Upload fails → ``(None, str(exc))``: the local normalized file is
+        still valid; the frontend just can't stream it from the bucket until
+        the upload is retried.
+
+    Best-effort by design — the pipeline doesn't fail an otherwise-good
+    ingest just because Storage is flaky.
+    """
+    if R.is_demo_mode() or not storage.bucket_configured("normalized"):
+        return None, None
+    key = f"{sha[:12]}.mp4"
+    try:
+        storage.upload_file(dst, key, kind="normalized")
+    except Exception as exc:  # noqa: BLE001 — Supabase client raises many shapes
+        log.warning("normalized upload failed for sha=%s: %s", sha[:12], exc)
+        return None, str(exc)
+    return key, None
 
 
 __all__ = [

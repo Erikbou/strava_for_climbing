@@ -90,15 +90,70 @@ def verify_demo() -> None:
 
 @app.command("init-db")
 def init_db_cmd() -> None:
-    """Print instructions for applying the Supabase schema migration."""
-    migration = P.REPO_ROOT / "supabase" / "migrations" / "0001_initial_schema.sql"
+    """Print instructions for applying the Supabase schema migrations."""
+    migrations = P.REPO_ROOT / "supabase" / "migrations"
     typer.echo(
-        "Supabase schema is applied out-of-band. Paste this file into the "
-        "Supabase Dashboard → SQL Editor and run it:\n"
-        f"  {migration}\n"
-        "Or, if you use the Supabase CLI:\n"
-        "  supabase db push"
+        "Supabase schema is applied out-of-band. Run each migration in order "
+        "in the Supabase Dashboard → SQL Editor:\n"
     )
+    for m in sorted(migrations.glob("*.sql")):
+        typer.echo(f"  {m}")
+    typer.echo("\nOr, if you use the Supabase CLI:\n  supabase db push")
+
+
+@app.command("pull-raw")
+def pull_raw(
+    dest: Path = typer.Option(
+        P.RAW_DIR, "--dest", help="Where to write the downloaded files."
+    ),
+    prefix: str = typer.Option("", "--prefix", help="Only pull keys with this prefix."),
+) -> None:
+    """Mirror the raw-uploads bucket to a local directory before running ingest.
+
+    Use when climbers upload through the frontend (which writes to the raw
+    bucket) and the pipeline operator wants to run ``strava ingest`` against
+    those files. Existing local files are NOT overwritten; the file is
+    skipped if a same-named file already exists.
+    """
+    from . import storage
+
+    if not storage.bucket_configured("raw"):
+        typer.echo(
+            "SUPABASE_STORAGE_RAW_BUCKET is not set — nothing to pull.", err=True
+        )
+        raise typer.Exit(2)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    keys = storage.list_keys("raw", prefix=prefix)
+    pulled = skipped = 0
+    for key in keys:
+        local = dest / Path(key).name
+        if local.exists():
+            skipped += 1
+            continue
+        storage.download_file(key, local, kind="raw")
+        typer.echo(f"pulled {key} -> {local}")
+        pulled += 1
+    typer.echo(f"pull-raw done: pulled={pulled} skipped={skipped} total={len(keys)}")
+
+
+@app.command("signed-url")
+def signed_url_cmd(
+    key: str = typer.Argument(..., help="Object key inside the bucket."),
+    kind: str = typer.Option(
+        "normalized",
+        "--kind",
+        help="Which bucket: raw, normalized, or overlays.",
+    ),
+    expires_in: int = typer.Option(3600, "--expires-in", help="Seconds before expiry."),
+) -> None:
+    """Print a time-limited signed URL for a Storage object. Handy for poking at uploads."""
+    from . import storage as storage_mod
+
+    if kind not in ("raw", "normalized", "overlays"):
+        typer.echo(f"--kind must be raw|normalized|overlays, got {kind!r}", err=True)
+        raise typer.Exit(2)
+    typer.echo(storage_mod.signed_url(key, kind=kind, expires_in=expires_in))  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":  # pragma: no cover

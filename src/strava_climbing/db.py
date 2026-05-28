@@ -120,6 +120,8 @@ def upsert_video(client: Client, v: Video) -> int:
                 "fps": v.fps,
                 "ingest_status": v.ingest_status,
                 "ingest_report": v.ingest_report,
+                "source_bucket_key": v.source_bucket_key,
+                "normalized_bucket_key": v.normalized_bucket_key,
             },
             on_conflict="source_sha256",
         )
@@ -150,6 +152,8 @@ def get_video_by_sha(client: Client, sha256: str) -> Video | None:
         fps=row["fps"],
         ingest_status=row["ingest_status"],
         ingest_report=row["ingest_report"],
+        source_bucket_key=row.get("source_bucket_key"),
+        normalized_bucket_key=row.get("normalized_bucket_key"),
     )
 
 

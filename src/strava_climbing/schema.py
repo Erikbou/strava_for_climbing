@@ -23,6 +23,10 @@ class Video:
     fps: float
     ingest_status: str  # "pending" | "ok" | "rejected" | "error"
     ingest_report: dict | None = None
+    # Supabase Storage keys — populated when SUPABASE_STORAGE_*_BUCKET env
+    # vars are set. None means the blob for that stage is local-only.
+    source_bucket_key: str | None = None
+    normalized_bucket_key: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
